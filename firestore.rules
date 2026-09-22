@@ -1,0 +1,36 @@
+rules_version = '2';
+
+// Every document lives under users/{uid}/… and is readable/writable only by
+// the signed-in user with that uid. Anything not matched below is denied.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function validEntry(d) {
+      return d.keys().hasOnly(['date', 'start', 'end', 'breakMinutes', 'rate', 'note', 'createdAt', 'updatedAt'])
+        && d.date is string && d.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && d.start is timestamp
+        && d.end is timestamp
+        && d.end > d.start
+        && d.breakMinutes is number && d.breakMinutes >= 0
+        && d.rate is number && d.rate >= 0
+        && d.note is string && d.note.size() <= 500;
+    }
+
+    match /users/{uid} {
+      match /settings/{docId} {
+        allow read, write: if isOwner(uid);
+      }
+      match /state/{docId} {
+        allow read, write: if isOwner(uid);
+      }
+      match /entries/{entryId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validEntry(request.resource.data);
+      }
+    }
+  }
+}
