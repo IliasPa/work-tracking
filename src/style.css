@@ -1004,3 +1004,10 @@ dialog textarea {
 .toast {
   bottom: calc(env(safe-area-inset-bottom) + 90px);
 }
+
+.people-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}

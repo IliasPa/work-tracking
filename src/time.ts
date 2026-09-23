@@ -30,7 +30,7 @@ export function parseDateStr(date: string): Date {
   return new Date(y, m - 1, d);
 }
 
-function at(date: string, time: string): Date {
+export function atLocal(date: string, time: string): Date {
   const [y, m, d] = date.split('-').map(Number);
   const [hh, mm] = time.split(':').map(Number);
   return new Date(y, m - 1, d, hh, mm);
@@ -41,8 +41,8 @@ function at(date: string, time: string): Date {
  * not after the start time, the shift crosses midnight and ends the next day.
  */
 export function buildRange(date: string, startTime: string, endTime: string): { start: Date; end: Date } {
-  const start = at(date, startTime);
-  const end = at(date, endTime);
+  const start = atLocal(date, startTime);
+  const end = atLocal(date, endTime);
   if (end <= start) end.setDate(end.getDate() + 1);
   return { start, end };
 }
@@ -162,4 +162,45 @@ export function formatMoney(amount: number, currency: string): string {
     moneyFormats.set(currency, fmt);
   }
   return fmt.format(amount);
+}
+
+/**
+ * A shift as it was worked, independent of where it is later viewed.
+ *
+ * `startWall`/`endWall` carry the clock times of the place the shift happened,
+ * rebuilt in the viewer's own timezone so a shift logged 22:00–06:00 in Athens
+ * still reads 22:00–06:00 in London. `totalMinutes` stays the real elapsed
+ * time, so a night that crosses a daylight-saving change still counts the hour.
+ * Entries saved before v0.4 have no clock times and fall back to the old
+ * behaviour of showing the viewer's local time.
+ */
+export interface WallClock {
+  startWall: Date;
+  endWall: Date;
+  totalMinutes: number;
+}
+
+export interface WallSource {
+  date: string;
+  start: Date;
+  end: Date;
+  startLocal?: string;
+  endLocal?: string;
+  endDate?: string;
+}
+
+export function wallClockOf(e: WallSource): WallClock {
+  const totalMinutes = Math.max(1, Math.round((e.end.getTime() - e.start.getTime()) / 60_000));
+  if (e.startLocal && e.endLocal && e.endDate) {
+    return { startWall: atLocal(e.date, e.startLocal), endWall: atLocal(e.endDate, e.endLocal), totalMinutes };
+  }
+  return { startWall: new Date(e.start), endWall: new Date(e.end), totalMinutes };
+}
+
+/** What the shift should read as: clock times as worked, and whether it ran past midnight. */
+export function displayTimes(e: WallSource): { start: string; end: string; overnight: boolean } {
+  if (e.startLocal && e.endLocal && e.endDate) {
+    return { start: e.startLocal, end: e.endLocal, overnight: e.endDate !== e.date };
+  }
+  return { start: toTimeStr(e.start), end: toTimeStr(e.end), overnight: isOvernight(e.start, e.end) };
 }

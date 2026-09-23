@@ -2,6 +2,38 @@
 
 Newest first. Each version is one commit in this repository.
 
+## v1.0 — 2026-09-23
+
+**Earnings stop moving**
+
+- Each shift now saves the multipliers in force when it was logged, and is paid
+  by those from then on. Changing a multiplier no longer re-values work you have
+  already invoiced.
+- Editing a shift keeps its saved multipliers; a line in the form says so and
+  offers "Use current rules" when they differ from today's.
+- Shifts logged before v1.0 have nothing saved, so they still follow the current
+  rules until you edit them.
+
+**Times stay where they were worked**
+
+- Shifts store the clock times as typed, so a shift logged 22:00–06:00 in Athens
+  still reads 22:00–06:00 anywhere else. Lists, PDFs and CSV all use them.
+- Night and Sunday multipliers are judged by the clock where the shift happened,
+  so travelling can no longer change what a past shift pays.
+- Hours worked are still measured from the real instants, so a night across a
+  daylight-saving change still counts the extra hour.
+
+**Sharing it with other people**
+
+- Invite-only: only accounts on the list (plus the owner) can sign in and store
+  anything, enforced by the security rules. Everyone else gets a "no access yet"
+  screen.
+- The owner manages the list under Settings → Who can use this app.
+- The sign-in screen says plainly that whoever runs the app can see what is
+  stored in it.
+- Settings → Your data: export everything as JSON, or delete the account's data
+  outright.
+
 ## v0.3 — 2026-09-23
 
 - Settings are reached only from the app logo; the account menu now holds just

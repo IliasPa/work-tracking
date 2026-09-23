@@ -21,7 +21,10 @@ usable offline.
   job.
 - **Pay multipliers**: overtime after N hours in a shift, a night window and
   Sunday. Only the highest applies to any minute, breaks spread across the
-  shift, and totals show paid hours next to worked hours.
+  shift, and totals show paid hours next to worked hours. Each shift keeps the
+  multipliers it was saved with, so changing them never re-values past work.
+- **Times don't travel**: clock times are stored as worked, so a shift reads and
+  pays the same in any timezone.
 - **Paid / unpaid**: mark a shift paid, see what you're still owed for the range,
   and mark everything shown as paid in one go.
 - **Overlap warning**: shifts covering the same hours are flagged in the list and
@@ -62,13 +65,20 @@ listed under.
 Settings live at `settings/main` because Firestore document paths need an even
 number of segments, so `users/{uid}/settings` alone can't be a document.
 
-**Isolation** is enforced server-side: a user can only read or write documents
-under their own `users/{uid}`. Signing out clears that device's offline cache.
+**Access** is invite-only and enforced server-side by
+[`firestore.rules`](firestore.rules): an account must be listed in
+`allowed/{email}` (or be the owner) before it can read or write anything, and it
+can only ever reach documents under its own `users/{uid}`. The owner manages the
+list in the app, under Settings → Who can use this app, and `VITE_OWNER_EMAIL`
+in `.env` must match the owner address hard-coded in the rules.
 
-[`firestore.rules`](firestore.rules) in this repo is a stricter version of the
-rules currently published: on top of the ownership check it validates entry
-fields (`end > start`, non-negative break and rate, note length). Publish it with
-`firebase deploy --only firestore:rules` if you want that extra protection.
+Note what this does **not** cover: whoever owns the Firebase project can read
+every document in it from the console. Rules constrain the app, not the owner.
+
+Signing out clears that device's offline cache.
+
+The rules do not check the *shape* of what is written (that an end is after its
+start, say); only the app writes data, and it validates before saving.
 
 ## Setup
 

@@ -1,4 +1,4 @@
-import { hoursOf, type Shift } from './time';
+import { wallClockOf, type WallSource } from './time';
 
 /**
  * Pay rules. A multiplier of 1 switches that rule off, as does an overtime
@@ -49,15 +49,28 @@ function inNightWindow(minute: number, startMin: number, endMin: number): boolea
   return startMin < endMin ? minute >= startMin && minute < endMin : minute >= startMin || minute < endMin;
 }
 
+export interface PayShift extends WallSource {
+  breakMinutes: number;
+  rate: number;
+  /** Rules saved with the shift; when absent the current ones are used. */
+  payRules?: PayRules | null;
+}
+
 /**
  * Works out what a shift pays. Every minute of the shift gets the highest
  * multiplier that applies to it (they don't stack), and the break is spread
  * evenly across the shift rather than taken off any particular part of it.
+ *
+ * Night and Sunday are judged by the clock where the shift was worked, so the
+ * answer doesn't change when the same shift is opened in another timezone.
  */
-export function payFor(shift: Shift, rules: PayRules): Pay {
-  const hours = hoursOf(shift);
-  const totalMinutes = Math.max(1, Math.round((shift.end.getTime() - shift.start.getTime()) / 60_000));
+export function payFor(shift: PayShift, rules: PayRules): Pay {
+  const { startWall, endWall, totalMinutes } = wallClockOf(shift);
   const workedMinutes = Math.max(0, totalMinutes - shift.breakMinutes);
+  const hours = workedMinutes / 60;
+  // The walk follows the clock on the wall; over a daylight-saving change that
+  // is an hour longer or shorter than the time actually elapsed.
+  const wallMinutes = Math.max(1, Math.round((endWall.getTime() - startWall.getTime()) / 60_000));
   const nightStart = minutesOfDay(rules.nightStart);
   const nightEnd = minutesOfDay(rules.nightEnd);
 
@@ -65,13 +78,13 @@ export function payFor(shift: Shift, rules: PayRules): Pay {
   // time in the same proportion the break was spread.
   const overtimeAfter =
     rules.overtimeAfterHours > 0 && workedMinutes > 0
-      ? (rules.overtimeAfterHours * 60 * totalMinutes) / workedMinutes
+      ? (rules.overtimeAfterHours * 60 * wallMinutes) / workedMinutes
       : Infinity;
 
   const breakdownMinutes: Record<PayReason, number> = { normal: 0, overtime: 0, night: 0, sunday: 0 };
   let sum = 0;
-  const cursor = new Date(shift.start);
-  for (let i = 0; i < totalMinutes; i++) {
+  const cursor = new Date(startWall);
+  for (let i = 0; i < wallMinutes; i++) {
     const isNight = inNightWindow(cursor.getHours() * 60 + cursor.getMinutes(), nightStart, nightEnd);
     const isSunday = cursor.getDay() === 0;
 
@@ -94,10 +107,10 @@ export function payFor(shift: Shift, rules: PayRules): Pay {
     cursor.setMinutes(cursor.getMinutes() + 1);
   }
 
-  const multiplier = sum / totalMinutes;
+  const multiplier = sum / wallMinutes;
   const paidHours = (workedMinutes / 60) * multiplier;
   // Scale the breakdown to worked hours so the parts add up to `hours`.
-  const scale = workedMinutes / totalMinutes / 60;
+  const scale = workedMinutes / wallMinutes / 60;
   const breakdown = {
     normal: breakdownMinutes.normal * scale,
     overtime: breakdownMinutes.overtime * scale,
@@ -120,4 +133,9 @@ export function rulesActive(rules: PayRules): boolean {
 /** Short labels for the reasons that actually applied, e.g. ["night", "overtime"]. */
 export function reasonsApplied(pay: Pay): PayReason[] {
   return (['overtime', 'night', 'sunday'] as PayReason[]).filter((r) => pay.breakdown[r] > 0.001);
+}
+
+/** Pay for a shift, using the rules frozen onto it when it has them. */
+export function payOfEntry(shift: PayShift, current: PayRules): Pay {
+  return payFor(shift, shift.payRules ?? current);
 }

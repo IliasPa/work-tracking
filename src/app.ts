@@ -7,16 +7,24 @@ import {
   cancelClock,
   clockIn,
   clockOut,
+  allowPerson,
   deleteEntry,
+  deleteEverything,
   deleteJob,
+  exportEverything,
+  revokePerson,
+  rulesOnly,
   saveJob,
   saveSettings,
   setPaid,
   updateEntry,
+  watchAccess,
+  watchAllowed,
   watchClock,
   watchEntries,
   watchJobs,
   watchSettings,
+  type AllowedPerson,
   type ClockState,
   type Entry,
   type EntryInput,
@@ -24,16 +32,16 @@ import {
   type Settings,
 } from './data';
 import { db } from './firebase';
-import { payFor, reasonsApplied, type Pay } from './pay';
+import { payFor, payOfEntry, reasonsApplied, type Pay, type PayRules } from './pay';
 import {
   RANGE_PRESETS,
   buildRange,
+  displayTimes,
   formatDuration,
   formatHours,
   formatMoney,
   formatRange,
   hoursOf,
-  isOvernight,
   matchingPreset,
   monthBounds,
   overlappingIds,
@@ -66,6 +74,12 @@ let signInError = '';
 type EntryMode = { kind: 'add' } | { kind: 'edit'; id: string } | { kind: 'clockout' };
 let entryMode: EntryMode = { kind: 'add' };
 let jobEditId: string | null = null;
+let allowed: AllowedPerson[] = [];
+let accessUnsub: Unsubscribe | null = null;
+
+/** The account that owns this deployment; it administers the access list. */
+const OWNER_EMAIL = (import.meta.env.VITE_OWNER_EMAIL ?? '').toLowerCase();
+const isOwner = () => Boolean(OWNER_EMAIL) && (user?.email ?? '').toLowerCase() === OWNER_EMAIL;
 
 const RANGE_KEY = 'hours.range';
 const JOB_FILTER_KEY = 'hours.job';
@@ -88,7 +102,7 @@ function esc(s: string): string {
 const money = (n: number) => formatMoney(n, settings.currency);
 const dayFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
 
-const payOf = (e: Entry): Pay => payFor(e, settings);
+const payOf = (e: Entry): Pay => payOfEntry(e, settings);
 const jobName = (id: string) => jobs.find((j) => j.id === id)?.name ?? (id ? '(deleted job)' : '');
 /** Entries the current job filter lets through. */
 const shown = (): Entry[] => (jobFilter ? entries.filter((e) => e.jobId === jobFilter) : entries);
@@ -147,9 +161,53 @@ export function start(el: HTMLElement) {
     if (u && u.uid === user?.uid) return;
     teardown();
     user = u;
-    if (u) renderMain();
+    if (u) gateOnAccess(u);
     else renderSignIn();
   });
+}
+
+/**
+ * Only invited accounts get in. The security rules are what actually enforce
+ * this; the check here is so the person sees a clear message instead of errors.
+ */
+function gateOnAccess(u: User) {
+  root.innerHTML = `<main class="center"><div class="spinner" aria-label="Loading"></div></main>`;
+  const email = u.email ?? '';
+  accessUnsub = watchAccess(
+    email,
+    (ok) => {
+      if (ok) {
+        if (!root.querySelector('.topbar')) renderMain();
+        return;
+      }
+      // The owner puts themselves on the list the first time they sign in.
+      if (isOwner()) {
+        allowPerson(email, 'owner').catch(() => renderNoAccess(email));
+        return;
+      }
+      renderNoAccess(email);
+    },
+    // Offline or an unreadable list: carry on and let the rules decide.
+    () => {
+      if (!root.querySelector('.topbar')) renderMain();
+    },
+  );
+}
+
+function renderNoAccess(email: string) {
+  accessUnsub?.();
+  accessUnsub = null;
+  root.innerHTML = `
+    <main class="center">
+      <div class="signin">
+        <img src="/icons/icon.svg" alt="" class="signin-logo" width="72" height="72">
+        <h1>No access yet</h1>
+        <p class="muted">You're signed in as <strong>${esc(email)}</strong>, but this app is invite-only.
+        Ask its owner to add you, then sign in again.</p>
+        <button class="btn ghost" id="noaccess-signout">Sign out</button>
+      </div>
+    </main>`;
+  $('#noaccess-signout').onclick = () => doSignOut().catch(reportError);
 }
 
 function friendlyAuthError(e: unknown): string {
@@ -160,6 +218,9 @@ function friendlyAuthError(e: unknown): string {
 }
 
 function teardown() {
+  accessUnsub?.();
+  accessUnsub = null;
+  allowed = [];
   listeners.forEach((u) => u());
   listeners = [];
   entriesUnsub?.();
@@ -196,7 +257,8 @@ function renderSignIn() {
       <div class="signin">
         <img src="/icons/icon.svg" alt="" class="signin-logo" width="72" height="72">
         <h1>Work Hours</h1>
-        <p class="muted">Log shifts in seconds. Synced across your devices, visible only to you.</p>
+        <p class="muted">Log shifts in seconds. Synced across your devices, and private from other users.</p>
+        <p class="muted small">Whoever runs this app can see everything stored in it.</p>
         <button class="btn google" id="signin-btn">${GOOGLE_G}<span>Sign in with Google</span></button>
         <p class="error" id="signin-error" ${signInError ? '' : 'hidden'}>${esc(signInError)}</p>
       </div>
@@ -310,6 +372,14 @@ function renderMain() {
       renderClock();
     }),
   );
+  if (isOwner()) {
+    listeners.push(
+      watchAllowed((people) => {
+        allowed = people;
+        if (root.querySelector('#people-list')) renderPeopleList();
+      }, reportError),
+    );
+  }
   subscribeEntries();
 
   tickTimer = window.setInterval(updateElapsed, 15_000);
@@ -534,6 +604,7 @@ function renderList() {
 
 function entryRowHtml(e: Entry): string {
   const pay = payOf(e);
+  const t = displayTimes(e);
   const meta = [jobName(e.jobId), e.breakMinutes ? `${e.breakMinutes}m break` : '', `${money(e.rate)}/h`]
     .filter(Boolean)
     .join(' · ');
@@ -547,8 +618,8 @@ function entryRowHtml(e: Entry): string {
     <li>
       <button class="entry" data-id="${esc(e.id)}">
         <span class="entry-main">
-          <span class="entry-time">${toTimeStr(e.start)} – ${toTimeStr(e.end)}${
-            isOvernight(e.start, e.end) ? '<sup title="Ends the next day">+1</sup>' : ''
+          <span class="entry-time">${t.start} – ${t.end}${
+            t.overnight ? '<sup title="Ends the next day">+1</sup>' : ''
           }</span>
           <span class="entry-meta">${esc(meta)}</span>
           ${e.note ? `<span class="entry-note">${esc(e.note)}</span>` : ''}
@@ -632,6 +703,7 @@ function entryDialogHtml(): string {
         <label>Note<input type="text" name="note" maxlength="500" placeholder="Optional" autocomplete="off"></label>
         <label class="check"><input type="checkbox" name="paid"><span>Paid</span></label>
         <p class="preview" id="entry-preview"></p>
+        <p class="muted small" id="entry-rules" hidden></p>
         <p class="warn" id="entry-overlap" hidden></p>
         <p class="error" id="entry-error" hidden></p>
         <div class="actions">
@@ -660,6 +732,9 @@ function entryForm() {
   };
 }
 
+/** Rules to save with the entry: the ones it already had, or today's. */
+let frozenRules: PayRules | null = null;
+
 /** Read and validate the form. Returns an error message or the entry. */
 function readEntryForm(): EntryInput | string {
   const { job, date, start, end, brk, rate, note, paid } = entryForm();
@@ -677,6 +752,11 @@ function readEntryForm(): EntryInput | string {
     note: note.value.trim(),
     paid: paid.checked,
     jobId: job.value,
+    // Clock times as typed, so the shift reads the same in any timezone.
+    startLocal: start.value,
+    endLocal: end.value,
+    endDate: toDateStr(span.end),
+    payRules: frozenRules ?? rulesOnly(settings),
   };
   if (hoursOf(entry) <= 0) return 'The break is longer than the shift.';
   return entry;
@@ -691,11 +771,11 @@ function updateEntryPreview() {
     overlap.hidden = true;
     return;
   }
-  const pay = payFor(res, settings);
+  const pay = payFor(res, res.payRules ?? settings);
   const reasons = reasonsApplied(pay);
   const bits = [formatHours(pay.hours), money(pay.earnings)];
   if (reasons.length) bits.push(`${pay.paidHours.toFixed(2)} paid h · ${reasons.join(' + ')}`);
-  if (isOvernight(res.start, res.end)) bits.push('ends next day');
+  if (res.endDate !== res.date) bits.push('ends next day');
   preview.textContent = bits.join(' · ');
 
   // Warn (without blocking) if these hours are already covered by another shift.
@@ -732,6 +812,7 @@ function openEntryDialog(mode: EntryMode) {
   if (mode.kind === 'edit') {
     const e = entries.find((x) => x.id === mode.id);
     if (!e) return;
+    frozenRules = e.payRules;
     $('#entry-title').textContent = 'Edit entry';
     fillJobSelect(e.jobId);
     date.value = e.date;
@@ -743,6 +824,7 @@ function openEntryDialog(mode: EntryMode) {
     paid.checked = e.paid;
   } else if (mode.kind === 'clockout') {
     if (!clock) return;
+    frozenRules = null;
     $('#entry-title').textContent = 'Clock out';
     fillJobSelect(defaultJob);
     date.value = toDateStr(clock.start);
@@ -753,6 +835,7 @@ function openEntryDialog(mode: EntryMode) {
     note.value = '';
     paid.checked = false;
   } else {
+    frozenRules = null;
     $('#entry-title').textContent = 'Add entry';
     fillJobSelect(defaultJob);
     date.value = toDateStr(now);
@@ -763,8 +846,29 @@ function openEntryDialog(mode: EntryMode) {
     note.value = '';
     paid.checked = false;
   }
+  updateRulesNotice();
   updateEntryPreview();
   dlg.showModal();
+}
+
+/**
+ * Shows when a shift is being paid by rules saved with it that no longer match
+ * the current ones, with a way to bring it up to date.
+ */
+function updateRulesNotice() {
+  const el = $('#entry-rules');
+  const current = rulesOnly(settings);
+  const stale = frozenRules && JSON.stringify(frozenRules) !== JSON.stringify(current);
+  el.hidden = !stale;
+  if (stale) {
+    el.innerHTML = `Paid by the multipliers saved with this shift.
+      <button type="button" class="link-btn" id="entry-rules-refresh">Use current rules</button>`;
+    $('#entry-rules-refresh').onclick = () => {
+      frozenRules = null;
+      updateRulesNotice();
+      updateEntryPreview();
+    };
+  }
 }
 
 /** A job's rate, falling back to the default rate. */
@@ -891,6 +995,29 @@ function settingsDialogHtml(): string {
           </div>
         </details>
 
+        <details id="people-section" hidden>
+          <summary>Who can use this app</summary>
+          <div class="section">
+            <div id="people-list" class="jobs-list"></div>
+            <div class="row">
+              <label>Invite by Google email<input type="email" id="people-email" placeholder="name@example.com" autocomplete="off"></label>
+            </div>
+            <button type="button" class="btn ghost small" id="people-add">Add person</button>
+            <p class="muted small">Only these accounts can sign in and store anything. Each person's hours stay
+            private from the others — but you run the server, so you can see all of it.</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>Your data</summary>
+          <div class="section">
+            <button type="button" class="btn ghost small" id="data-export">Export everything (JSON)</button>
+            <button type="button" class="btn danger-ghost small" id="data-delete">Delete everything</button>
+            <p class="muted small">The export holds every shift, job and setting on this account. Deleting is
+            permanent and signs you out.</p>
+          </div>
+        </details>
+
         <details>
           <summary>Report columns</summary>
           <div class="section">
@@ -956,13 +1083,76 @@ function openSettingsDialog() {
   settingsField('reportEarnings').checked = s.reportEarnings;
   settingsField('reportNote').checked = s.reportNote;
   renderJobsList();
+  const peopleSection = $('#people-section');
+  peopleSection.hidden = !isOwner();
+  if (isOwner()) renderPeopleList();
   $('#settings-error').hidden = true;
   $<HTMLDialogElement>('#settings-dialog').showModal();
+}
+
+function renderPeopleList() {
+  const el = $('#people-list');
+  el.innerHTML = allowed.length
+    ? allowed
+        .map(
+          (p) => `
+            <div class="job-row people-row">
+              <span>${esc(p.email)}${p.note ? ` <span class="muted small">${esc(p.note)}</span>` : ''}</span>
+              ${
+                p.email.toLowerCase() === OWNER_EMAIL
+                  ? '<span class="muted small">you</span>'
+                  : `<button type="button" class="link-btn" data-revoke="${esc(p.email)}">Remove</button>`
+              }
+            </div>`,
+        )
+        .join('')
+    : `<p class="muted small">Nobody invited yet.</p>`;
 }
 
 function wireSettingsDialog() {
   const dlg = $<HTMLDialogElement>('#settings-dialog');
   const f = $<HTMLFormElement>('#settings-form');
+
+  $('#people-add').onclick = () => {
+    const input = $<HTMLInputElement>('#people-email');
+    const email = input.value.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      toast('That does not look like an email address.', 'error');
+      return;
+    }
+    allowPerson(email, '').catch(reportError);
+    input.value = '';
+    toast(`${email} can now sign in`);
+  };
+  $('#people-list').onclick = (ev) => {
+    const email = (ev.target as HTMLElement).closest<HTMLElement>('[data-revoke]')?.dataset.revoke;
+    if (!email) return;
+    if (!confirm(`Remove ${email}? They lose access immediately. Their shifts stay in the database.`)) return;
+    revokePerson(email).catch(reportError);
+    toast(`${email} removed`);
+  };
+
+  $('#data-export').onclick = async () => {
+    try {
+      const json = await exportEverything(user!.uid);
+      const { deliver } = await import('./download');
+      await deliver(new Blob([json], { type: 'application/json' }), `work-hours-backup-${toDateStr(new Date())}.json`,
+        'application/json', 'Work hours backup');
+    } catch (e) {
+      reportError(e);
+    }
+  };
+
+  $('#data-delete').onclick = async () => {
+    if (!confirm('Delete every shift, job and setting on this account? This cannot be undone.')) return;
+    if (prompt('Type DELETE to confirm.') !== 'DELETE') return;
+    try {
+      await deleteEverything(user!.uid);
+      await doSignOut();
+    } catch (e) {
+      reportError(e);
+    }
+  };
   $('#settings-cancel').onclick = () => dlg.close();
   dlg.addEventListener('click', (ev) => {
     if (ev.target === dlg) dlg.close();

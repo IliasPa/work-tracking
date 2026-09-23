@@ -3,6 +3,8 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
+  getDocs,
   onSnapshot,
   orderBy,
   query,
@@ -77,6 +79,12 @@ export interface Entry {
   paid: boolean;
   /** Empty when the shift isn't tied to a job. */
   jobId: string;
+  /** Clock times as worked, so they don't move with the viewer's timezone. */
+  startLocal: string;
+  endLocal: string;
+  endDate: string;
+  /** Multipliers frozen when the shift was saved; null for pre-v0.4 entries. */
+  payRules: PayRules | null;
   /** True until the write has reached the server (e.g. while offline). */
   pending: boolean;
 }
@@ -209,6 +217,10 @@ export function watchEntries(
           note: str(v.note, ''),
           paid: bool(v.paid, false),
           jobId: str(v.jobId, ''),
+          startLocal: str(v.startLocal, ''),
+          endLocal: str(v.endLocal, ''),
+          endDate: str(v.endDate, ''),
+          payRules: readRules(v.payRules),
           pending: d.metadata.hasPendingWrites,
         };
       });
@@ -217,6 +229,32 @@ export function watchEntries(
     },
     onError,
   );
+}
+
+/** Reads a frozen rule set, ignoring anything that isn't a complete one. */
+function readRules(v: unknown): PayRules | null {
+  if (!v || typeof v !== 'object') return null;
+  const d = v as Record<string, unknown>;
+  if (typeof d.nightStart !== 'string' || typeof d.nightEnd !== 'string') return null;
+  return {
+    overtimeAfterHours: num(d.overtimeAfterHours, 0),
+    overtimeMultiplier: num(d.overtimeMultiplier, 1),
+    nightStart: d.nightStart,
+    nightEnd: d.nightEnd,
+    nightMultiplier: num(d.nightMultiplier, 1),
+    sundayMultiplier: num(d.sundayMultiplier, 1),
+  };
+}
+
+export function rulesOnly(s: PayRules): PayRules {
+  return {
+    overtimeAfterHours: s.overtimeAfterHours,
+    overtimeMultiplier: s.overtimeMultiplier,
+    nightStart: s.nightStart,
+    nightEnd: s.nightEnd,
+    nightMultiplier: s.nightMultiplier,
+    sundayMultiplier: s.sundayMultiplier,
+  };
 }
 
 function toFirestore(e: EntryInput) {
@@ -229,6 +267,10 @@ function toFirestore(e: EntryInput) {
     note: e.note,
     paid: e.paid,
     jobId: e.jobId,
+    startLocal: e.startLocal,
+    endLocal: e.endLocal,
+    endDate: e.endDate,
+    payRules: e.payRules,
   };
 }
 
@@ -264,6 +306,78 @@ export async function setPaid(uid: string, ids: string[], paid: boolean): Promis
     for (const id of ids.slice(i, i + 400)) {
       batch.update(doc(entriesCol(uid), id), { paid, updatedAt: serverTimestamp() });
     }
+    await batch.commit();
+  }
+}
+
+// --- Access list ------------------------------------------------------------
+
+/**
+ * Who may use this app, one document per email address. The rules check it on
+ * every read and write, so removing someone locks them out immediately.
+ */
+export interface AllowedPerson {
+  email: string;
+  note: string;
+}
+
+const allowedCol = () => collection(db, 'allowed');
+export const emailKey = (email: string) => email.trim().toLowerCase();
+
+/** Watches whether this email may use the app. */
+export function watchAccess(email: string, cb: (allowed: boolean) => void, onError: (e: Error) => void): Unsubscribe {
+  return onSnapshot(doc(allowedCol(), emailKey(email)), (snap) => cb(snap.exists()), onError);
+}
+
+/** The whole list. Only the owner is allowed to read it. */
+export function watchAllowed(cb: (people: AllowedPerson[]) => void, onError: (e: Error) => void): Unsubscribe {
+  return onSnapshot(
+    query(allowedCol(), orderBy('__name__')),
+    (snap) => cb(snap.docs.map((d) => ({ email: d.id, note: str(d.data().note, '') }))),
+    onError,
+  );
+}
+
+export function allowPerson(email: string, note: string): Promise<void> {
+  return setDoc(doc(allowedCol(), emailKey(email)), { note, addedAt: serverTimestamp() }, { merge: true });
+}
+
+export function revokePerson(email: string): Promise<void> {
+  return deleteDoc(doc(allowedCol(), emailKey(email)));
+}
+
+// --- Whole-account export and delete ----------------------------------------
+
+/** Everything this account has stored, for the user to keep. */
+export async function exportEverything(uid: string): Promise<string> {
+  const [entriesSnap, jobsSnap, settingsSnap] = await Promise.all([
+    getDocs(query(entriesCol(uid), orderBy('date'))),
+    getDocs(jobsCol(uid)),
+    getDoc(settingsRef(uid)),
+  ]);
+  const plain = (v: unknown): unknown => (v instanceof Timestamp ? v.toDate().toISOString() : v);
+  const mapDoc = (d: { id: string; data: () => Record<string, unknown> }) =>
+    Object.fromEntries([['id', d.id], ...Object.entries(d.data()).map(([k, v]) => [k, plain(v)])]);
+  return JSON.stringify(
+    {
+      exportedAt: new Date().toISOString(),
+      settings: settingsSnap.data() ?? null,
+      jobs: jobsSnap.docs.map(mapDoc),
+      entries: entriesSnap.docs.map(mapDoc),
+    },
+    null,
+    2,
+  );
+}
+
+/** Deletes every document this account owns. Cannot be undone. */
+export async function deleteEverything(uid: string): Promise<void> {
+  const [entriesSnap, jobsSnap] = await Promise.all([getDocs(entriesCol(uid)), getDocs(jobsCol(uid))]);
+  const refs = [...entriesSnap.docs, ...jobsSnap.docs].map((d) => d.ref);
+  refs.push(settingsRef(uid), clockRef(uid));
+  for (let i = 0; i < refs.length; i += 400) {
+    const batch = writeBatch(db);
+    for (const ref of refs.slice(i, i + 400)) batch.delete(ref);
     await batch.commit();
   }
 }

@@ -2,8 +2,8 @@ import { jsPDF } from 'jspdf';
 import { autoTable, type RowInput, type Styles } from 'jspdf-autotable';
 import fontUrl from 'dejavu-fonts-ttf/ttf/DejaVuSans.ttf?url';
 import type { Entry, Job } from './data';
-import { payFor, reasonsApplied, rulesActive, type PayRules } from './pay';
-import { formatMoney, hoursOf, isOvernight, parseDateStr, toTimeStr, type DateRange } from './time';
+import { payOfEntry, reasonsApplied, rulesActive, type PayRules } from './pay';
+import { displayTimes, formatMoney, hoursOf, parseDateStr, type DateRange } from './time';
 import { deliver } from './download';
 
 // jsPDF's built-in fonts only cover Latin-1, so embed DejaVu Sans to render
@@ -108,7 +108,7 @@ export function buildReport(o: ReportOptions, font: string): jsPDF {
   const money = (n: number) => formatMoney(n, o.currency);
   const fmt = dateFmt();
   const jobName = (id: string) => o.jobs.find((j) => j.id === id)?.name ?? (id ? '(deleted job)' : '');
-  const pay = new Map(rows.map((e) => [e.id, payFor(e, o.rules)]));
+  const pay = new Map(rows.map((e) => [e.id, payOfEntry(e, o.rules)]));
 
   const totalHours = rows.reduce((s, e) => s + hoursOf(e), 0);
   const totalPaidHours = rows.reduce((s, e) => s + pay.get(e.id)!.paidHours, 0);
@@ -126,12 +126,15 @@ export function buildReport(o: ReportOptions, font: string): jsPDF {
   const cols: { head: string; width: number; min?: number; right?: boolean; cell: (e: Entry) => string; total?: string }[] =
     [{ head: 'Date', width: 0, min: 76, cell: (e) => fmt.format(parseDateStr(e.date)) }];
   if (showJob) cols.push({ head: 'Job', width: 0, min: 60, cell: (e) => jobName(e.jobId) });
-  cols.push({ head: 'Start', width: 42, right: true, cell: (e) => toTimeStr(e.start) });
+  cols.push({ head: 'Start', width: 42, right: true, cell: (e) => displayTimes(e).start });
   cols.push({
     head: 'End',
     width: 60,
     right: true,
-    cell: (e) => toTimeStr(e.end) + (isOvernight(e.start, e.end) ? ' +1' : ''),
+    cell: (e) => {
+      const t = displayTimes(e);
+      return t.end + (t.overnight ? ' +1' : '');
+    },
   });
   if (o.columns.break) cols.push({ head: 'Break', width: 44, right: true, cell: (e) => `${e.breakMinutes} m` });
   cols.push({ head: 'Hours', width: 48, right: true, cell: (e) => hoursOf(e).toFixed(2), total: totalHours.toFixed(2) });
@@ -306,10 +309,11 @@ export function buildInvoice(o: InvoiceOptions, font: string): jsPDF {
   ];
   let subtotal = 0;
   const body: RowInput[] = rows.map((e) => {
-    const pay = payFor(e, o.rules);
+    const pay = payOfEntry(e, o.rules);
     subtotal += pay.earnings;
     const reasons = reasonsApplied(pay);
-    const parts = [jobName(e.jobId), e.note, `${toTimeStr(e.start)}–${toTimeStr(e.end)}`].filter(Boolean);
+    const t = displayTimes(e);
+    const parts = [jobName(e.jobId), e.note, `${t.start}–${t.end}`].filter(Boolean);
     if (reasons.length) parts.push(`incl. ${reasons.join(' + ')}`);
     return [
       fmt.format(parseDateStr(e.date)),

@@ -1,41 +1,43 @@
 rules_version = '2';
 
-// Every document lives under users/{uid}/… and is readable/writable only by
-// the signed-in user with that uid. Anything not matched below is denied.
+// Invite-only, and strictly per-user.
+//
+// * Only accounts listed in /allowed/{email} (plus the owner) can read or write
+//   anything at all.
+// * Each of those accounts can only reach documents under its own users/{uid}.
+//   Nobody using the app can see anyone else's hours.
+// * The owner administers the list. Note that the owner, like anyone with
+//   access to the Firebase console, can read every document in the project:
+//   rules constrain the app, not the project's owner.
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isOwner(uid) {
-      return request.auth != null && request.auth.uid == uid;
+    function signedIn() {
+      return request.auth != null && request.auth.token.email != null;
     }
 
-    function validEntry(d) {
-      return d.keys().hasOnly(['date', 'start', 'end', 'breakMinutes', 'rate', 'note', 'paid', 'jobId', 'createdAt', 'updatedAt'])
-        && d.date is string && d.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
-        && d.start is timestamp
-        && d.end is timestamp
-        && d.end > d.start
-        && d.breakMinutes is number && d.breakMinutes >= 0
-        && d.rate is number && d.rate >= 0
-        && d.note is string && d.note.size() <= 500
-        && d.paid is bool
-        && d.jobId is string;
+    function email() {
+      return request.auth.token.email.lower();
     }
 
-    match /users/{uid} {
-      match /settings/{docId} {
-        allow read, write: if isOwner(uid);
-      }
-      match /state/{docId} {
-        allow read, write: if isOwner(uid);
-      }
-      match /jobs/{jobId} {
-        allow read, write: if isOwner(uid);
-      }
-      match /entries/{entryId} {
-        allow read, delete: if isOwner(uid);
-        allow create, update: if isOwner(uid) && validEntry(request.resource.data);
-      }
+    // Kept in step with VITE_OWNER_EMAIL in .env.
+    function isOwner() {
+      return signedIn() && email() == 'iliasparaskevas3@gmail.com';
+    }
+
+    function invited() {
+      return signedIn() && exists(/databases/$(database)/documents/allowed/$(email()));
+    }
+
+    // The guest list. A person may check their own entry; only the owner sees
+    // or changes the whole list.
+    match /allowed/{personEmail} {
+      allow get: if isOwner() || (signedIn() && email() == personEmail);
+      allow list, write: if isOwner();
+    }
+
+    match /users/{uid}/{document=**} {
+      allow read, write: if signedIn() && request.auth.uid == uid && (invited() || isOwner());
     }
   }
 }

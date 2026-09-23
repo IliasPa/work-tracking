@@ -1,6 +1,6 @@
 import type { Entry, Job } from './data';
-import { hoursOf, isOvernight, toTimeStr } from './time';
-import { payFor, type PayRules } from './pay';
+import { displayTimes, hoursOf } from './time';
+import { payOfEntry, type PayRules } from './pay';
 import { deliver } from './download';
 
 const HEADERS = [
@@ -24,15 +24,16 @@ export function buildCsv(entries: Entry[], rules: PayRules, jobs: Job[]): string
   let totalPaidHours = 0;
   let totalEarnings = 0;
   for (const e of rows) {
-    const pay = payFor(e, rules);
+    const pay = payOfEntry(e, rules);
+    const t = displayTimes(e);
     totalPaidHours += pay.paidHours;
     totalEarnings += pay.earnings;
     lines.push(
       [
         e.date,
         jobs.find((j) => j.id === e.jobId)?.name ?? (e.jobId ? '(deleted job)' : ''),
-        toTimeStr(e.start),
-        toTimeStr(e.end) + (isOvernight(e.start, e.end) ? ' +1' : ''),
+        t.start,
+        t.end + (t.overnight ? ' +1' : ''),
         e.breakMinutes,
         hoursOf(e).toFixed(2),
         pay.paidHours.toFixed(2),
