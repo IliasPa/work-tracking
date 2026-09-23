@@ -26,11 +26,11 @@ usable offline.
   and mark everything shown as paid in one go.
 - **Overlap warning**: shifts covering the same hours are flagged in the list and
   while you edit, so the same time never gets counted (or billed) twice.
-- **Export the filtered range**: timesheet PDF (A4, fixed columns, TOTAL row,
-  landscape when wide), CSV (every column, including job, paid hours and
+- **Export the filtered range**: timesheet PDF (A4 portrait, fixed columns,
+  TOTAL row), CSV (every column, including job, paid hours and
   multiplier), and an **invoice PDF** with your details, the client's, a line per
   shift, VAT and total. On iPhone all three open the share sheet.
-- **Defaults pop-up** behind the app logo: hourly rate, currency (20 common ones,
+- **Settings pop-up** behind the app logo (the account corner keeps only sign-out): hourly rate, currency (20 common ones,
   EUR by default), the start/end/break that pre-fill a new entry, and which
   columns the PDF report includes.
 - **Offline**: entries saved without a connection are tagged "Syncing" and sync

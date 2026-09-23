@@ -71,8 +71,8 @@ export interface InvoiceOptions {
 const TEAL: [number, number, number] = [15, 118, 110];
 const PAGE_MARGIN = 40;
 
-function newDoc(font: string, orientation: 'portrait' | 'landscape' = 'portrait'): jsPDF {
-  const doc = new jsPDF({ unit: 'pt', format: 'a4', orientation });
+function newDoc(font: string): jsPDF {
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
   doc.addFileToVFS('DejaVuSans.ttf', font);
   doc.addFont('DejaVuSans.ttf', 'DejaVu', 'normal');
   doc.setFont('DejaVu');
@@ -116,6 +116,10 @@ export function buildReport(o: ReportOptions, font: string): jsPDF {
   // Extra columns only appear when they carry information.
   const showJob = rows.some((e) => e.jobId);
   const showPaidHours = rulesActive(o.rules) && Math.abs(totalPaidHours - totalHours) > 0.005;
+  // Set once the columns are known; the Note cells below read it when the body
+  // is built, so a tight table gets short multiplier tags instead of words.
+  let dense = false;
+  const SHORT: Record<string, string> = { overtime: 'OT', night: 'NT', sunday: 'SU' };
 
   // width 0 = flexible: those columns share whatever space is left over, so the
   // table always fills the page width.
@@ -157,15 +161,23 @@ export function buildReport(o: ReportOptions, font: string): jsPDF {
       min: 90,
       cell: (e) => {
         const reasons = reasonsApplied(pay.get(e.id)!);
-        const tag = reasons.length ? `[${reasons.join(', ')}] ` : '';
-        return tag + e.note;
+        if (!reasons.length) return e.note;
+        return `[${reasons.map((r) => (dense ? SHORT[r] : r)).join(dense ? '+' : ', ')}] ${e.note}`;
       },
     });
   }
 
-  // Past seven columns a portrait page squeezes the text columns, so turn the
-  // page sideways instead of truncating job names and notes.
-  const doc = newDoc(font, cols.length > 7 ? 'landscape' : 'portrait');
+  // The page stays portrait, so a wide report is fitted by shrinking the type
+  // and the fixed columns rather than turning the page sideways.
+  dense = cols.length > 7;
+  if (dense) {
+    for (const c of cols) {
+      c.width = Math.round(c.width * 0.84);
+      if (c.min) c.min = Math.round(c.min * 0.8);
+    }
+  }
+
+  const doc = newDoc(font);
   doc.setFontSize(15);
   doc.text('Work hours', PAGE_MARGIN, 48);
   doc.setFontSize(11);
@@ -177,6 +189,7 @@ export function buildReport(o: ReportOptions, font: string): jsPDF {
 
   drawTable(doc, {
     startY: 96,
+    dense,
     cols,
     body: rows.map((e) => cols.map((c) => c.cell(e))),
     foot: [cols.map((c, i) => (i === 0 ? 'TOTAL' : (c.total ?? '')))],
@@ -189,6 +202,7 @@ function drawTable(
   doc: jsPDF,
   t: {
     startY: number;
+    dense?: boolean;
     cols: { head: string; width: number; min?: number; right?: boolean; wrap?: boolean }[];
     body: RowInput[];
     foot?: RowInput[];
@@ -214,7 +228,12 @@ function drawTable(
     body: t.body,
     foot: t.foot,
     showFoot: 'lastPage',
-    styles: { font: 'DejaVu', fontSize: 9, cellPadding: { top: 5, bottom: 5, left: 6, right: 6 }, overflow: 'hidden' },
+    styles: {
+      font: 'DejaVu',
+      fontSize: t.dense ? 7.5 : 9,
+      cellPadding: t.dense ? { top: 4, bottom: 4, left: 3, right: 3 } : { top: 5, bottom: 5, left: 6, right: 6 },
+      overflow: 'hidden',
+    },
     headStyles: { fillColor: TEAL, textColor: 255, fontStyle: 'normal', halign: 'left' },
     footStyles: { fillColor: [237, 244, 243], textColor: 20, fontStyle: 'normal' },
     alternateRowStyles: { fillColor: [248, 249, 250] },

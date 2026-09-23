@@ -966,3 +966,41 @@ dialog textarea {
 .stats {
   flex-wrap: wrap;
 }
+
+/* Floating add button ---------------------------------------------------- */
+
+.fab {
+  position: fixed;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: calc(env(safe-area-inset-bottom) + 18px);
+  z-index: 20;
+  width: 58px;
+  height: 58px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 2rem;
+  font-weight: 300;
+  line-height: 1;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 28%);
+}
+
+.fab:active {
+  transform: scale(0.94);
+}
+
+@media (prefers-color-scheme: dark) {
+  .fab {
+    color: #04201d;
+  }
+}
+
+/* Keep the last entry clear of the floating button. */
+.container {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 96px);
+}
+
+.toast {
+  bottom: calc(env(safe-area-inset-bottom) + 90px);
+}

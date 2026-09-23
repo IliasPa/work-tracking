@@ -240,7 +240,6 @@ function renderMain() {
         </button>
         <div class="menu" id="account-menu" role="menu" hidden>
           <div class="menu-head"><strong>${esc(name)}</strong><small>${esc(u.email ?? '')}</small></div>
-          <button role="menuitem" id="menu-settings">Settings</button>
           <button role="menuitem" id="menu-signout" class="danger">Sign out</button>
         </div>
       </div>
@@ -248,7 +247,6 @@ function renderMain() {
 
     <main class="container">
       <section class="card clock" id="clock"></section>
-      <button class="btn secondary block" id="add-btn">+ Add entry</button>
 
       <section class="card filter">
         <div class="chips" id="presets">
@@ -264,6 +262,8 @@ function renderMain() {
       <div class="card summary" id="summary"></div>
       <div id="list"></div>
     </main>
+
+    <button class="fab" id="add-btn" title="Add entry" aria-label="Add entry">+</button>
 
     ${entryDialogHtml()}
     ${settingsDialogHtml()}
@@ -334,10 +334,6 @@ function wireAccountMenu() {
   document.addEventListener('click', (ev) => {
     if (!menu.hidden && !menu.contains(ev.target as Node)) setOpen(false);
   });
-  $('#menu-settings').onclick = () => {
-    setOpen(false);
-    openSettingsDialog();
-  };
   $('#menu-signout').onclick = () => {
     setOpen(false);
     doSignOut().catch(reportError);

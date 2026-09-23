@@ -2,6 +2,15 @@
 
 Newest first. Each version is one commit in this repository.
 
+## v0.3 — 2026-09-23
+
+- Settings are reached only from the app logo; the account menu now holds just
+  the signed-in account and Sign out.
+- The "Add entry" button became a floating + in the bottom-right corner.
+- The timesheet PDF is always portrait. A wide report (many columns) is fitted
+  by tightening the type and columns and shortening the multiplier tags to
+  OT / NT / SU, instead of turning the page sideways.
+
 ## v0.2 — 2026-09-23
 
 **Jobs and clients**
