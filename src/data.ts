@@ -14,32 +14,57 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './firebase';
+import { NO_MULTIPLIERS, type PayRules } from './pay';
 
-export interface Settings {
+export interface Settings extends PayRules {
   defaultRate: number;
   currency: string;
-  /** Pre-filled times for the manual "add entry" form. */
+  /** Pre-filled values for the manual "add entry" form. */
   defaultStart: string;
   defaultEnd: string;
   defaultBreakMinutes: number;
+  /** Job used on the last saved entry; pre-selected on the next one. */
+  lastJobId: string;
   /** Which columns the PDF report includes. */
   reportNote: boolean;
   reportRate: boolean;
   reportBreak: boolean;
   reportEarnings: boolean;
+  /** Invoice header: who is sending it, and how to pay it. */
+  invoiceFrom: string;
+  invoicePayment: string;
+  invoicePrefix: string;
+  invoiceCounter: number;
+  vatPercent: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  ...NO_MULTIPLIERS,
   defaultRate: 0,
   currency: 'EUR',
   defaultStart: '09:00',
   defaultEnd: '17:00',
   defaultBreakMinutes: 0,
+  lastJobId: '',
   reportNote: true,
   reportRate: true,
   reportBreak: true,
   reportEarnings: true,
+  invoiceFrom: '',
+  invoicePayment: '',
+  invoicePrefix: 'INV',
+  invoiceCounter: 1,
+  vatPercent: 0,
 };
+
+/** A job or client. Its rate pre-fills entries; its client details head invoices. */
+export interface Job {
+  id: string;
+  name: string;
+  rate: number;
+  clientName: string;
+  clientDetails: string;
+}
 
 export interface Entry {
   id: string;
@@ -50,6 +75,8 @@ export interface Entry {
   rate: number;
   note: string;
   paid: boolean;
+  /** Empty when the shift isn't tied to a job. */
+  jobId: string;
   /** True until the write has reached the server (e.g. while offline). */
   pending: boolean;
 }
@@ -65,31 +92,80 @@ export interface ClockState {
 const settingsRef = (uid: string) => doc(db, 'users', uid, 'settings', 'main');
 const clockRef = (uid: string) => doc(db, 'users', uid, 'state', 'clock');
 const entriesCol = (uid: string) => collection(db, 'users', uid, 'entries');
+const jobsCol = (uid: string) => collection(db, 'users', uid, 'jobs');
 
 const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
-const str = (v: unknown, fallback: string) => (typeof v === 'string' && v ? v : fallback);
+const str = (v: unknown, fallback: string) => (typeof v === 'string' ? v || fallback : fallback);
 const bool = (v: unknown, fallback: boolean) => (typeof v === 'boolean' ? v : fallback);
 
 export function watchSettings(uid: string, cb: (s: Settings) => void): Unsubscribe {
   return onSnapshot(settingsRef(uid), (snap) => {
     const d = snap.data() ?? {};
+    const D = DEFAULT_SETTINGS;
     cb({
-      defaultRate: num(d.defaultRate, DEFAULT_SETTINGS.defaultRate),
-      currency: str(d.currency, DEFAULT_SETTINGS.currency),
-      defaultStart: str(d.defaultStart, DEFAULT_SETTINGS.defaultStart),
-      defaultEnd: str(d.defaultEnd, DEFAULT_SETTINGS.defaultEnd),
-      defaultBreakMinutes: num(d.defaultBreakMinutes, DEFAULT_SETTINGS.defaultBreakMinutes),
-      reportNote: bool(d.reportNote, DEFAULT_SETTINGS.reportNote),
-      reportRate: bool(d.reportRate, DEFAULT_SETTINGS.reportRate),
-      reportBreak: bool(d.reportBreak, DEFAULT_SETTINGS.reportBreak),
-      reportEarnings: bool(d.reportEarnings, DEFAULT_SETTINGS.reportEarnings),
+      defaultRate: num(d.defaultRate, D.defaultRate),
+      currency: str(d.currency, D.currency),
+      defaultStart: str(d.defaultStart, D.defaultStart),
+      defaultEnd: str(d.defaultEnd, D.defaultEnd),
+      defaultBreakMinutes: num(d.defaultBreakMinutes, D.defaultBreakMinutes),
+      lastJobId: str(d.lastJobId, ''),
+      reportNote: bool(d.reportNote, D.reportNote),
+      reportRate: bool(d.reportRate, D.reportRate),
+      reportBreak: bool(d.reportBreak, D.reportBreak),
+      reportEarnings: bool(d.reportEarnings, D.reportEarnings),
+      overtimeAfterHours: num(d.overtimeAfterHours, D.overtimeAfterHours),
+      overtimeMultiplier: num(d.overtimeMultiplier, D.overtimeMultiplier),
+      nightStart: str(d.nightStart, D.nightStart),
+      nightEnd: str(d.nightEnd, D.nightEnd),
+      nightMultiplier: num(d.nightMultiplier, D.nightMultiplier),
+      sundayMultiplier: num(d.sundayMultiplier, D.sundayMultiplier),
+      invoiceFrom: str(d.invoiceFrom, ''),
+      invoicePayment: str(d.invoicePayment, ''),
+      invoicePrefix: str(d.invoicePrefix, D.invoicePrefix),
+      invoiceCounter: num(d.invoiceCounter, D.invoiceCounter),
+      vatPercent: num(d.vatPercent, D.vatPercent),
     });
   });
 }
 
-export function saveSettings(uid: string, s: Settings): Promise<void> {
+export function saveSettings(uid: string, s: Partial<Settings>): Promise<void> {
   return setDoc(settingsRef(uid), s, { merge: true });
 }
+
+// --- Jobs -------------------------------------------------------------------
+
+export function watchJobs(uid: string, cb: (jobs: Job[]) => void, onError: (e: Error) => void): Unsubscribe {
+  return onSnapshot(
+    query(jobsCol(uid), orderBy('name')),
+    (snap) =>
+      cb(
+        snap.docs.map((d) => {
+          const v = d.data();
+          return {
+            id: d.id,
+            name: str(v.name, 'Untitled'),
+            rate: num(v.rate, 0),
+            clientName: str(v.clientName, ''),
+            clientDetails: str(v.clientDetails, ''),
+          };
+        }),
+      ),
+    onError,
+  );
+}
+
+export function saveJob(uid: string, job: Omit<Job, 'id'> & { id?: string }): Promise<void> {
+  const { id, ...fields } = job;
+  const ref = id ? doc(jobsCol(uid), id) : doc(jobsCol(uid));
+  return setDoc(ref, { ...fields, updatedAt: serverTimestamp() }, { merge: true });
+}
+
+/** Removes the job. Entries keep their jobId and show the job as missing. */
+export function deleteJob(uid: string, id: string): Promise<void> {
+  return deleteDoc(doc(jobsCol(uid), id));
+}
+
+// --- Clock ------------------------------------------------------------------
 
 export function watchClock(uid: string, cb: (c: ClockState | null) => void): Unsubscribe {
   return onSnapshot(clockRef(uid), (snap) => {
@@ -105,6 +181,8 @@ export function clockIn(uid: string, start = new Date()): Promise<void> {
 export function cancelClock(uid: string): Promise<void> {
   return deleteDoc(clockRef(uid));
 }
+
+// --- Entries ----------------------------------------------------------------
 
 /** Entries whose date falls within [from, to] (inclusive, "YYYY-MM-DD"). */
 export function watchEntries(
@@ -130,6 +208,7 @@ export function watchEntries(
           rate: num(v.rate, 0),
           note: str(v.note, ''),
           paid: bool(v.paid, false),
+          jobId: str(v.jobId, ''),
           pending: d.metadata.hasPendingWrites,
         };
       });
@@ -149,6 +228,7 @@ function toFirestore(e: EntryInput) {
     rate: e.rate,
     note: e.note,
     paid: e.paid,
+    jobId: e.jobId,
   };
 }
 

@@ -1,8 +1,11 @@
-import type { Entry } from './data';
-import { earningsOf, hoursOf, isOvernight, toTimeStr } from './time';
+import type { Entry, Job } from './data';
+import { hoursOf, isOvernight, toTimeStr } from './time';
+import { payFor, type PayRules } from './pay';
 import { deliver } from './download';
 
-const HEADERS = ['Date', 'Start', 'End', 'Break (min)', 'Hours', 'Rate', 'Earnings', 'Note', 'Paid'];
+const HEADERS = [
+  'Date', 'Job', 'Start', 'End', 'Break (min)', 'Hours', 'Paid hours', 'Multiplier', 'Rate', 'Earnings', 'Note', 'Paid',
+];
 
 function cell(value: string | number): string {
   const s = String(value);
@@ -15,19 +18,27 @@ function cell(value: string | number): string {
  * Numbers use a dot decimal separator and no currency symbol so they stay
  * numeric when imported.
  */
-export function buildCsv(entries: Entry[]): string {
+export function buildCsv(entries: Entry[], rules: PayRules, jobs: Job[]): string {
   const rows = [...entries].sort((a, b) => a.start.getTime() - b.start.getTime());
   const lines = [HEADERS.join(',')];
+  let totalPaidHours = 0;
+  let totalEarnings = 0;
   for (const e of rows) {
+    const pay = payFor(e, rules);
+    totalPaidHours += pay.paidHours;
+    totalEarnings += pay.earnings;
     lines.push(
       [
         e.date,
+        jobs.find((j) => j.id === e.jobId)?.name ?? (e.jobId ? '(deleted job)' : ''),
         toTimeStr(e.start),
         toTimeStr(e.end) + (isOvernight(e.start, e.end) ? ' +1' : ''),
         e.breakMinutes,
         hoursOf(e).toFixed(2),
+        pay.paidHours.toFixed(2),
+        pay.multiplier.toFixed(3),
         e.rate.toFixed(2),
-        earningsOf(e).toFixed(2),
+        pay.earnings.toFixed(2),
         e.note,
         e.paid ? 'yes' : 'no',
       ]
@@ -36,13 +47,22 @@ export function buildCsv(entries: Entry[]): string {
     );
   }
   const totalHours = rows.reduce((s, e) => s + hoursOf(e), 0);
-  const totalEarnings = rows.reduce((s, e) => s + earningsOf(e), 0);
-  lines.push(['TOTAL', '', '', '', totalHours.toFixed(2), '', totalEarnings.toFixed(2), '', ''].map(cell).join(','));
+  lines.push(
+    ['TOTAL', '', '', '', '', totalHours.toFixed(2), totalPaidHours.toFixed(2), '', '', totalEarnings.toFixed(2), '', '']
+      .map(cell)
+      .join(','),
+  );
   return lines.join('\r\n');
 }
 
-export function exportCsv(entries: Entry[], fileName: string, title: string): Promise<void> {
+export function exportCsv(
+  entries: Entry[],
+  rules: PayRules,
+  jobs: Job[],
+  fileName: string,
+  title: string,
+): Promise<void> {
   // The BOM makes Excel open UTF-8 (and Greek notes) correctly.
-  const blob = new Blob(['﻿' + buildCsv(entries)], { type: 'text/csv;charset=utf-8' });
+  const blob = new Blob(['﻿' + buildCsv(entries, rules, jobs)], { type: 'text/csv;charset=utf-8' });
   return deliver(blob, fileName, 'text/csv', title);
 }

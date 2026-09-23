@@ -857,3 +857,112 @@ dialog select {
   font-size: 1rem;
   color: var(--text);
 }
+
+/* Collapsible settings sections ------------------------------------------ */
+
+dialog {
+  overflow-y: auto;
+}
+
+dialog details {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+}
+
+dialog summary {
+  padding: 12px 14px;
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+}
+
+dialog summary::-webkit-details-marker {
+  display: none;
+}
+
+dialog summary::after {
+  content: '＋';
+  float: right;
+  color: var(--muted);
+}
+
+dialog details[open] summary::after {
+  content: '－';
+}
+
+dialog details[open] summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+dialog textarea {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  font: inherit;
+  font-size: 1rem;
+  color: var(--text);
+  resize: vertical;
+}
+
+/* Jobs ------------------------------------------------------------------- */
+
+.jobs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.job-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  text-align: left;
+  font-weight: 600;
+}
+
+.job-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.job-filter select {
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.tag.mult {
+  background: var(--accent-soft);
+  color: var(--accent);
+  text-transform: capitalize;
+}
+
+.stats {
+  flex-wrap: wrap;
+}

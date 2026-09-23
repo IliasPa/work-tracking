@@ -1,4 +1,6 @@
-# Work Hours — v0.1
+# Work Hours
+
+See [CHANGES.md](CHANGES.md) for what each version added.
 
 A small installable web app (PWA) for logging work shifts. Sign in with Google;
 each account gets its own private set of hours, synced live across devices and
@@ -14,13 +16,20 @@ usable offline.
   last month, this year). Shifts are grouped by day, newest first, with hours and
   earnings per shift, per day and for the whole range. Tap a shift to edit or
   delete it. The chosen range is remembered on that device.
+- **Jobs / clients**: each with its own rate and client details. New shifts
+  default to the job used last; a filter narrows the list and the exports to one
+  job.
+- **Pay multipliers**: overtime after N hours in a shift, a night window and
+  Sunday. Only the highest applies to any minute, breaks spread across the
+  shift, and totals show paid hours next to worked hours.
 - **Paid / unpaid**: mark a shift paid, see what you're still owed for the range,
   and mark everything shown as paid in one go.
 - **Overlap warning**: shifts covering the same hours are flagged in the list and
   while you edit, so the same time never gets counted (or billed) twice.
-- **Export the filtered range**: PDF (A4, fixed columns, TOTAL row) and CSV
-  (Date, Start, End, Break, Hours, Rate, Earnings, Note, Paid). On iPhone both
-  open the share sheet.
+- **Export the filtered range**: timesheet PDF (A4, fixed columns, TOTAL row,
+  landscape when wide), CSV (every column, including job, paid hours and
+  multiplier), and an **invoice PDF** with your details, the client's, a line per
+  shift, VAT and total. On iPhone all three open the share sheet.
 - **Defaults pop-up** behind the app logo: hourly rate, currency (20 common ones,
   EUR by default), the start/end/break that pre-fill a new entry, and which
   columns the PDF report includes.
@@ -33,14 +42,20 @@ vite-plugin-pwa, jsPDF + jspdf-autotable.
 ## Data model
 
 ```
-users/{uid}/settings/main      { defaultRate, currency }
+users/{uid}/settings/main      { defaultRate, currency, default start/end/break,
+                                 lastJobId, pay multipliers, invoice details,
+                                 report column toggles }
 users/{uid}/state/clock        { start }            // present only while clocked in
+users/{uid}/jobs/{jobId}       { name, rate, clientName, clientDetails }
 users/{uid}/entries/{entryId}  { date, start, end, breakMinutes, rate, note,
-                                 paid, createdAt, updatedAt }
+                                 paid, jobId, createdAt, updatedAt }
 ```
 
 Hours and earnings are never stored. They are computed when read:
-`hours = (end − start) / 3 600 000 − breakMinutes / 60`, `earnings = hours × rate`.
+`hours = (end − start) / 3 600 000 − breakMinutes / 60`. Earnings are
+`paid hours × rate`, where paid hours apply the multipliers minute by minute
+(see [`src/pay.ts`](src/pay.ts)); with no multipliers set, paid hours are simply
+the hours worked.
 `date` is the local start date (`YYYY-MM-DD`) and decides which day a shift is
 listed under.
 
