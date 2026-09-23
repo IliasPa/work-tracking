@@ -9,6 +9,7 @@ import {
   clockOut,
   deleteEntry,
   saveSettings,
+  setPaid,
   updateEntry,
   watchClock,
   watchEntries,
@@ -20,17 +21,24 @@ import {
 } from './data';
 import { db } from './firebase';
 import {
+  RANGE_PRESETS,
   buildRange,
   earningsOf,
   formatDuration,
   formatHours,
   formatMoney,
+  formatRange,
   hoursOf,
   isOvernight,
+  matchingPreset,
   monthBounds,
+  overlappingIds,
   parseDateStr,
+  presetRange,
   toDateStr,
   toTimeStr,
+  type DateRange,
+  type RangePreset,
 } from './time';
 
 // ---------------------------------------------------------------------------
@@ -41,7 +49,8 @@ let user: User | null = null;
 let settings: Settings = DEFAULT_SETTINGS;
 let clock: ClockState | null = null;
 let entries: Entry[] = [];
-let month = firstOfMonth(new Date());
+let overlaps = new Set<string>();
+let range: DateRange = monthBounds(new Date());
 let listeners: Unsubscribe[] = [];
 let entriesUnsub: Unsubscribe | null = null;
 let tickTimer: number | undefined;
@@ -49,6 +58,14 @@ let signInError = '';
 
 type EntryMode = { kind: 'add' } | { kind: 'edit'; id: string } | { kind: 'clockout' };
 let entryMode: EntryMode = { kind: 'add' };
+
+const RANGE_KEY = 'hours.range';
+
+// 20 common currencies; EUR first as the default.
+const CURRENCIES = [
+  'EUR', 'USD', 'GBP', 'CHF', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'HUF',
+  'RON', 'BGN', 'TRY', 'CAD', 'AUD', 'NZD', 'JPY', 'CNY', 'INR', 'AED',
+];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -59,13 +76,8 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 }
 
-function firstOfMonth(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), 1);
-}
-
 const money = (n: number) => formatMoney(n, settings.currency);
 const dayFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
-const monthFmt = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' });
 
 let toastTimer: number | undefined;
 function toast(msg: string, kind: 'info' | 'error' = 'info') {
@@ -80,6 +92,24 @@ function toast(msg: string, kind: 'info' | 'error' = 'info') {
 function reportError(e: unknown) {
   console.error(e);
   toast(e instanceof Error ? e.message : String(e), 'error');
+}
+
+function loadRange(): DateRange {
+  try {
+    const saved = JSON.parse(localStorage.getItem(RANGE_KEY) ?? 'null');
+    if (saved && typeof saved.from === 'string' && typeof saved.to === 'string') return saved;
+  } catch {
+    // Private mode or blocked storage: fall back to the current month.
+  }
+  return monthBounds(new Date());
+}
+
+function storeRange(r: DateRange) {
+  try {
+    localStorage.setItem(RANGE_KEY, JSON.stringify(r));
+  } catch {
+    // Not important enough to bother the user about.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +149,7 @@ function teardown() {
   settings = DEFAULT_SETTINGS;
   clock = null;
   entries = [];
+  overlaps = new Set();
 }
 
 async function doSignOut() {
@@ -175,10 +206,13 @@ function renderMain() {
   const avatar = u.photoURL
     ? `<img class="avatar" src="${esc(u.photoURL)}" alt="" referrerpolicy="no-referrer">`
     : `<span class="avatar fallback">${initial}</span>`;
+  range = loadRange();
 
   root.innerHTML = `
     <header class="topbar">
-      <div class="brand"><img src="/icons/icon.svg" alt="" width="28" height="28"><span>Hours</span></div>
+      <button class="brand" id="settings-btn" title="Settings" aria-label="Settings">
+        <img src="/icons/icon.svg" alt="" width="28" height="28"><span>Hours</span>
+      </button>
       <div class="account">
         <button class="account-btn" id="account-btn" aria-haspopup="menu" aria-expanded="false" title="${esc(u.email ?? '')}">
           ${avatar}<span class="account-name">${esc(name)}</span>
@@ -195,15 +229,18 @@ function renderMain() {
       <section class="card clock" id="clock"></section>
       <button class="btn secondary block" id="add-btn">+ Add entry</button>
 
-      <section class="month">
-        <div class="month-nav">
-          <button class="icon-btn" id="prev-month" aria-label="Previous month">‹</button>
-          <h2 id="month-title"></h2>
-          <button class="icon-btn" id="next-month" aria-label="Next month">›</button>
+      <section class="card filter">
+        <div class="chips" id="presets">
+          ${RANGE_PRESETS.map((p) => `<button class="chip" data-preset="${p}">${p}</button>`).join('')}
         </div>
-        <div class="card summary" id="summary"></div>
-        <div id="list"></div>
+        <div class="row dates">
+          <label>From<input type="date" id="from"></label>
+          <label>To<input type="date" id="to"></label>
+        </div>
       </section>
+
+      <div class="card summary" id="summary"></div>
+      <div id="list"></div>
     </main>
 
     ${entryDialogHtml()}
@@ -216,22 +253,22 @@ function renderMain() {
   wireAccountMenu();
   wireEntryDialog();
   wireSettingsDialog();
+  wireFilter();
 
+  $('#settings-btn').onclick = openSettingsDialog;
   $('#add-btn').onclick = () => openEntryDialog({ kind: 'add' });
-  $('#prev-month').onclick = () => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1));
-  $('#next-month').onclick = () => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1));
   $('#list').onclick = (ev) => {
     const row = (ev.target as HTMLElement).closest<HTMLElement>('[data-id]');
     if (row) openEntryDialog({ kind: 'edit', id: row.dataset.id! });
   };
 
   renderClock();
-  renderMonth();
+  renderRange();
 
   listeners.push(
     watchSettings(u.uid, (s) => {
       settings = s;
-      renderMonth();
+      renderRange();
     }),
     watchClock(u.uid, (c) => {
       clock = c;
@@ -306,50 +343,109 @@ function updateElapsed() {
 }
 
 // ---------------------------------------------------------------------------
-// Month view
+// Date-range filter
 
-function setMonth(d: Date) {
-  const next = firstOfMonth(d);
-  if (next.getTime() === month.getTime()) return;
-  month = next;
+function wireFilter() {
+  $('#presets').onclick = (ev) => {
+    const preset = (ev.target as HTMLElement).closest<HTMLElement>('[data-preset]')?.dataset.preset;
+    if (preset) setRange(presetRange(preset as RangePreset));
+  };
+  const from = $<HTMLInputElement>('#from');
+  const to = $<HTMLInputElement>('#to');
+  from.onchange = () => setRange({ from: from.value, to: from.value > to.value ? from.value : to.value });
+  to.onchange = () => setRange({ from: to.value < from.value ? to.value : from.value, to: to.value });
+}
+
+function setRange(next: DateRange) {
+  if (!next.from || !next.to) return;
+  if (next.from === range.from && next.to === range.to) return;
+  range = next;
+  storeRange(range);
   entries = [];
+  overlaps = new Set();
   subscribeEntries();
-  renderMonth();
+  renderRange();
 }
 
 function subscribeEntries() {
   entriesUnsub?.();
-  const { from, to } = monthBounds(month);
   entriesUnsub = watchEntries(
     user!.uid,
-    from,
-    to,
+    range.from,
+    range.to,
     (list) => {
       entries = list;
-      renderMonth();
+      overlaps = overlappingIds(list);
+      renderRange();
     },
     reportError,
   );
 }
 
-function renderMonth() {
-  const title = root.querySelector('#month-title');
-  if (!title) return;
-  title.textContent = monthFmt.format(month);
-  $<HTMLButtonElement>('#next-month').disabled = month.getTime() >= firstOfMonth(new Date()).getTime();
+/** Repaints everything that depends on the range: inputs, totals and the list. */
+function renderRange() {
+  if (!root.querySelector('#summary')) return;
+  $<HTMLInputElement>('#from').value = range.from;
+  $<HTMLInputElement>('#to').value = range.to;
+  const active = matchingPreset(range);
+  root.querySelectorAll<HTMLElement>('[data-preset]').forEach((el) => {
+    el.classList.toggle('on', el.dataset.preset === active);
+  });
+  renderSummary();
+  renderList();
+}
 
+function renderSummary() {
   const totalHours = entries.reduce((s, e) => s + hoursOf(e), 0);
   const totalEarn = entries.reduce((s, e) => s + earningsOf(e), 0);
-  $('#summary').innerHTML = `
-    <div class="stat"><span class="stat-label">Hours</span><span class="stat-value">${totalHours.toFixed(2)}</span></div>
-    <div class="stat"><span class="stat-label">Earned</span><span class="stat-value">${money(totalEarn)}</span></div>
-    <div class="stat"><span class="stat-label">Shifts</span><span class="stat-value">${entries.length}</span></div>
-    <button class="btn ghost small" id="export-btn" ${entries.length ? '' : 'disabled'}>Export PDF</button>`;
-  $('#export-btn').onclick = exportMonth;
+  const unpaid = entries.filter((e) => !e.paid);
+  const unpaidEarn = unpaid.reduce((s, e) => s + earningsOf(e), 0);
 
+  $('#summary').innerHTML = `
+    <div class="stats">
+      <div class="stat"><span class="stat-label">Hours</span><span class="stat-value">${totalHours.toFixed(2)}</span></div>
+      <div class="stat"><span class="stat-label">Earned</span><span class="stat-value">${money(totalEarn)}</span></div>
+      <div class="stat"><span class="stat-label">Shifts</span><span class="stat-value">${entries.length}</span></div>
+    </div>
+    ${
+      overlaps.size
+        ? `<p class="warn">⚠︎ ${overlaps.size} shifts overlap in this range — check for hours logged twice.</p>`
+        : ''
+    }
+    ${
+      unpaid.length
+        ? `<div class="unpaid-row">
+             <span class="muted">Unpaid: <strong>${money(unpaidEarn)}</strong> over ${unpaid.length} shift${unpaid.length === 1 ? '' : 's'}</span>
+             <button class="btn ghost small" id="mark-paid">Mark all paid</button>
+           </div>`
+        : ''
+    }
+    <div class="exports">
+      <button class="btn ghost small" id="export-pdf" ${entries.length ? '' : 'disabled'}>PDF</button>
+      <button class="btn ghost small" id="export-csv" ${entries.length ? '' : 'disabled'}>CSV</button>
+    </div>`;
+
+  $('#export-pdf').onclick = exportRangePdf;
+  $('#export-csv').onclick = exportRangeCsv;
+  const markPaid = root.querySelector<HTMLButtonElement>('#mark-paid');
+  if (markPaid) {
+    markPaid.onclick = () => {
+      if (!confirm(`Mark ${unpaid.length} shift${unpaid.length === 1 ? '' : 's'} as paid?`)) return;
+      markPaid.disabled = true;
+      setPaid(
+        user!.uid,
+        unpaid.map((e) => e.id),
+        true,
+      ).catch(reportError);
+      toast('Marked as paid');
+    };
+  }
+}
+
+function renderList() {
   const list = $('#list');
   if (!entries.length) {
-    list.innerHTML = `<p class="empty">No shifts logged in ${esc(monthFmt.format(month))}.</p>`;
+    list.innerHTML = `<p class="empty">No shifts in ${esc(formatRange(range))}.</p>`;
     return;
   }
 
@@ -378,15 +474,21 @@ function renderMonth() {
 
 function entryRowHtml(e: Entry): string {
   const meta = [e.breakMinutes ? `${e.breakMinutes}m break` : '', `${money(e.rate)}/h`].filter(Boolean).join(' · ');
+  const tags = [
+    e.paid ? '<span class="tag paid">Paid</span>' : '',
+    overlaps.has(e.id) ? '<span class="tag warn" title="Overlaps another shift">Overlap</span>' : '',
+    e.pending ? '<span class="tag pending" title="Waiting to sync">Syncing</span>' : '',
+  ].join('');
   return `
     <li>
       <button class="entry" data-id="${esc(e.id)}">
         <span class="entry-main">
           <span class="entry-time">${toTimeStr(e.start)} – ${toTimeStr(e.end)}${
             isOvernight(e.start, e.end) ? '<sup title="Ends the next day">+1</sup>' : ''
-          }${e.pending ? '<span class="pending" title="Waiting to sync"></span>' : ''}</span>
+          }</span>
           <span class="entry-meta">${meta}</span>
           ${e.note ? `<span class="entry-note">${esc(e.note)}</span>` : ''}
+          ${tags ? `<span class="tags">${tags}</span>` : ''}
         </span>
         <span class="entry-nums">
           <strong>${formatHours(hoursOf(e))}</strong>
@@ -396,20 +498,45 @@ function entryRowHtml(e: Entry): string {
     </li>`;
 }
 
-async function exportMonth() {
-  const btn = $<HTMLButtonElement>('#export-btn');
+// ---------------------------------------------------------------------------
+// Export
+
+function exportFileName(ext: string): string {
+  return `work-hours-${range.from}_${range.to}.${ext}`;
+}
+
+async function exportRangePdf() {
+  const btn = $<HTMLButtonElement>('#export-pdf');
   btn.disabled = true;
   try {
     const { exportPdf } = await import('./pdf');
-    const y = month.getFullYear();
-    const m = String(month.getMonth() + 1).padStart(2, '0');
     await exportPdf({
-      title: `Work hours — ${monthFmt.format(month)}`,
+      range,
+      rangeLabel: formatRange(range),
       userName: user!.displayName || user!.email || '',
       currency: settings.currency,
+      columns: {
+        break: settings.reportBreak,
+        rate: settings.reportRate,
+        earnings: settings.reportEarnings,
+        note: settings.reportNote,
+      },
       entries,
-      fileName: `work-hours-${y}-${m}.pdf`,
+      fileName: exportFileName('pdf'),
     });
+  } catch (e) {
+    reportError(e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function exportRangeCsv() {
+  const btn = $<HTMLButtonElement>('#export-csv');
+  btn.disabled = true;
+  try {
+    const { exportCsv } = await import('./csv');
+    await exportCsv(entries, exportFileName('csv'), `Work hours — ${formatRange(range)}`);
   } catch (e) {
     reportError(e);
   } finally {
@@ -435,7 +562,9 @@ function entryDialogHtml(): string {
           <label>Rate / hour<input type="number" name="rate" min="0" step="0.01" inputmode="decimal"></label>
         </div>
         <label>Note<input type="text" name="note" maxlength="500" placeholder="Optional" autocomplete="off"></label>
+        <label class="check"><input type="checkbox" name="paid"><span>Paid</span></label>
         <p class="preview" id="entry-preview"></p>
+        <p class="warn" id="entry-overlap" hidden></p>
         <p class="error" id="entry-error" hidden></p>
         <div class="actions">
           <button type="button" class="btn danger-ghost" id="entry-delete" hidden>Delete</button>
@@ -450,37 +579,65 @@ function entryDialogHtml(): string {
 function entryForm() {
   const f = $<HTMLFormElement>('#entry-form');
   const field = (n: string) => f.elements.namedItem(n) as HTMLInputElement;
-  return { f, date: field('date'), start: field('start'), end: field('end'), brk: field('break'), rate: field('rate'), note: field('note') };
+  return {
+    f,
+    date: field('date'),
+    start: field('start'),
+    end: field('end'),
+    brk: field('break'),
+    rate: field('rate'),
+    note: field('note'),
+    paid: field('paid'),
+  };
 }
 
 /** Read and validate the form. Returns an error message or the entry. */
 function readEntryForm(): EntryInput | string {
-  const { date, start, end, brk, rate, note } = entryForm();
+  const { date, start, end, brk, rate, note, paid } = entryForm();
   if (!date.value || !start.value || !end.value) return 'Date, start and end are required.';
-  const range = buildRange(date.value, start.value, end.value);
+  const span = buildRange(date.value, start.value, end.value);
   const breakMinutes = brk.value ? Math.round(Number(brk.value)) : 0;
   const r = rate.value ? Number(rate.value) : 0;
   if (!Number.isFinite(breakMinutes) || breakMinutes < 0) return 'Break must be 0 or more minutes.';
   if (!Number.isFinite(r) || r < 0) return 'Rate must be 0 or more.';
-  const entry: EntryInput = { date: date.value, ...range, breakMinutes, rate: r, note: note.value.trim() };
+  const entry: EntryInput = {
+    date: date.value,
+    ...span,
+    breakMinutes,
+    rate: r,
+    note: note.value.trim(),
+    paid: paid.checked,
+  };
   if (hoursOf(entry) <= 0) return 'The break is longer than the shift.';
   return entry;
 }
 
 function updateEntryPreview() {
   const res = readEntryForm();
-  const el = $('#entry-preview');
+  const preview = $('#entry-preview');
+  const overlap = $('#entry-overlap');
   if (typeof res === 'string') {
-    el.textContent = '';
+    preview.textContent = '';
+    overlap.hidden = true;
     return;
   }
   const overnight = isOvernight(res.start, res.end) ? ' · ends next day' : '';
-  el.textContent = `${formatHours(hoursOf(res))} · ${money(earningsOf(res))}${overnight}`;
+  preview.textContent = `${formatHours(hoursOf(res))} · ${money(earningsOf(res))}${overnight}`;
+
+  // Warn (without blocking) if these hours are already covered by another shift.
+  const editingId = entryMode.kind === 'edit' ? entryMode.id : null;
+  const clash = entries.find(
+    (e) => e.id !== editingId && e.start.getTime() < res.end.getTime() && res.start.getTime() < e.end.getTime(),
+  );
+  overlap.hidden = !clash;
+  if (clash) {
+    overlap.textContent = `⚠︎ Overlaps ${dayFmt.format(clash.start)} ${toTimeStr(clash.start)}–${toTimeStr(clash.end)}.`;
+  }
 }
 
 function openEntryDialog(mode: EntryMode) {
   entryMode = mode;
-  const { date, start, end, brk, rate, note } = entryForm();
+  const { date, start, end, brk, rate, note, paid } = entryForm();
   const dlg = $<HTMLDialogElement>('#entry-dialog');
   const now = new Date();
   $('#entry-error').hidden = true;
@@ -496,23 +653,26 @@ function openEntryDialog(mode: EntryMode) {
     brk.value = e.breakMinutes ? String(e.breakMinutes) : '';
     rate.value = String(e.rate);
     note.value = e.note;
+    paid.checked = e.paid;
   } else if (mode.kind === 'clockout') {
     if (!clock) return;
     $('#entry-title').textContent = 'Clock out';
     date.value = toDateStr(clock.start);
     start.value = toTimeStr(clock.start);
     end.value = toTimeStr(now);
-    brk.value = '';
+    brk.value = settings.defaultBreakMinutes ? String(settings.defaultBreakMinutes) : '';
     rate.value = String(settings.defaultRate);
     note.value = '';
+    paid.checked = false;
   } else {
     $('#entry-title').textContent = 'Add entry';
     date.value = toDateStr(now);
-    start.value = '';
-    end.value = '';
-    brk.value = '';
+    start.value = settings.defaultStart;
+    end.value = settings.defaultEnd;
+    brk.value = settings.defaultBreakMinutes ? String(settings.defaultBreakMinutes) : '';
     rate.value = String(settings.defaultRate);
     note.value = '';
+    paid.checked = false;
   }
   updateEntryPreview();
   dlg.showModal();
@@ -548,8 +708,11 @@ function wireEntryDialog() {
     write.catch(reportError);
     dlg.close();
     toast(navigator.onLine ? 'Saved' : 'Saved offline — will sync when back online');
-    const target = firstOfMonth(parseDateStr(res.date));
-    if (target.getTime() !== month.getTime()) setMonth(target);
+    // Make sure the shift that was just saved is actually visible.
+    if (res.date < range.from || res.date > range.to) {
+      setRange({ from: res.date < range.from ? res.date : range.from, to: res.date > range.to ? res.date : range.to });
+      toast(`Range widened to include ${res.date}`);
+    }
   };
 
   $('#entry-delete').onclick = () => {
@@ -562,21 +725,35 @@ function wireEntryDialog() {
 }
 
 // ---------------------------------------------------------------------------
-// Settings dialog
-
-const CURRENCIES = ['EUR', 'USD', 'GBP', 'CHF', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'CAD', 'AUD', 'JPY'];
+// Settings dialog (defaults + report columns)
 
 function settingsDialogHtml(): string {
   return `
     <dialog id="settings-dialog">
       <form id="settings-form" novalidate>
-        <h2 tabindex="-1" autofocus>Settings</h2>
-        <label>Default hourly rate<input type="number" name="rate" min="0" step="0.01" inputmode="decimal" required></label>
-        <label>Currency
-          <input type="text" name="currency" list="currency-list" maxlength="3" autocapitalize="characters" autocomplete="off" required>
-          <datalist id="currency-list">${CURRENCIES.map((c) => `<option value="${c}">`).join('')}</datalist>
-        </label>
-        <p class="muted small">The default rate pre-fills new entries. Changing it doesn't alter past entries.</p>
+        <h2 tabindex="-1" autofocus>Defaults</h2>
+        <div class="row">
+          <label>Hourly rate<input type="number" name="rate" min="0" step="0.01" inputmode="decimal" required></label>
+          <label>Currency
+            <select name="currency">${CURRENCIES.map((c) => `<option value="${c}">${c}</option>`).join('')}</select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Start<input type="time" name="start"></label>
+          <label>End<input type="time" name="end"></label>
+          <label>Break (min)<input type="number" name="break" min="0" step="1" inputmode="numeric"></label>
+        </div>
+        <p class="muted small">Used to pre-fill new entries. Past entries keep the rate they were saved with.</p>
+
+        <h3>Report columns</h3>
+        <div class="checks">
+          <label class="check"><input type="checkbox" name="reportBreak"><span>Breaks</span></label>
+          <label class="check"><input type="checkbox" name="reportRate"><span>Rate</span></label>
+          <label class="check"><input type="checkbox" name="reportEarnings"><span>Earnings</span></label>
+          <label class="check"><input type="checkbox" name="reportNote"><span>Notes</span></label>
+        </div>
+        <p class="muted small">Applies to the PDF. The CSV always includes every column.</p>
+
         <p class="error" id="settings-error" hidden></p>
         <div class="actions">
           <span class="spacer"></span>
@@ -587,37 +764,62 @@ function settingsDialogHtml(): string {
     </dialog>`;
 }
 
-function openSettingsDialog() {
+function settingsForm() {
   const f = $<HTMLFormElement>('#settings-form');
-  (f.elements.namedItem('rate') as HTMLInputElement).value = String(settings.defaultRate);
-  (f.elements.namedItem('currency') as HTMLInputElement).value = settings.currency;
+  return {
+    f,
+    field: <T extends HTMLElement = HTMLInputElement>(n: string) => f.elements.namedItem(n) as T,
+  };
+}
+
+function openSettingsDialog() {
+  const { field } = settingsForm();
+  field('rate').value = String(settings.defaultRate);
+  field<HTMLSelectElement>('currency').value = settings.currency;
+  field('start').value = settings.defaultStart;
+  field('end').value = settings.defaultEnd;
+  field('break').value = String(settings.defaultBreakMinutes);
+  field('reportBreak').checked = settings.reportBreak;
+  field('reportRate').checked = settings.reportRate;
+  field('reportEarnings').checked = settings.reportEarnings;
+  field('reportNote').checked = settings.reportNote;
   $('#settings-error').hidden = true;
   $<HTMLDialogElement>('#settings-dialog').showModal();
 }
 
 function wireSettingsDialog() {
   const dlg = $<HTMLDialogElement>('#settings-dialog');
-  const f = $<HTMLFormElement>('#settings-form');
+  const { f, field } = settingsForm();
   $('#settings-cancel').onclick = () => dlg.close();
   dlg.addEventListener('click', (ev) => {
     if (ev.target === dlg) dlg.close();
   });
   f.onsubmit = (ev) => {
     ev.preventDefault();
-    const rate = Number((f.elements.namedItem('rate') as HTMLInputElement).value);
-    const currency = (f.elements.namedItem('currency') as HTMLInputElement).value.trim().toUpperCase();
+    const rate = Number(field('rate').value);
+    const brk = Math.round(Number(field('break').value || '0'));
     const err = $('#settings-error');
     if (!Number.isFinite(rate) || rate < 0) {
       err.textContent = 'Rate must be 0 or more.';
       err.hidden = false;
       return;
     }
-    if (!/^[A-Z]{3}$/.test(currency)) {
-      err.textContent = 'Currency must be a 3-letter code, e.g. EUR.';
+    if (!Number.isFinite(brk) || brk < 0) {
+      err.textContent = 'Break must be 0 or more minutes.';
       err.hidden = false;
       return;
     }
-    saveSettings(user!.uid, { defaultRate: rate, currency }).catch(reportError);
+    saveSettings(user!.uid, {
+      defaultRate: rate,
+      currency: field<HTMLSelectElement>('currency').value,
+      defaultStart: field('start').value || DEFAULT_SETTINGS.defaultStart,
+      defaultEnd: field('end').value || DEFAULT_SETTINGS.defaultEnd,
+      defaultBreakMinutes: brk,
+      reportBreak: field('reportBreak').checked,
+      reportRate: field('reportRate').checked,
+      reportEarnings: field('reportEarnings').checked,
+      reportNote: field('reportNote').checked,
+    }).catch(reportError);
     dlg.close();
     toast('Settings saved');
   };

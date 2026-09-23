@@ -249,8 +249,17 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 6px 10px 6px 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
   font-weight: 700;
   font-size: 1.1rem;
+}
+
+.brand:hover {
+  border-color: var(--border);
+  background: var(--surface);
 }
 
 .brand img {
@@ -423,9 +432,14 @@ button:disabled {
 
 .summary {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 10px;
   padding: 12px 14px;
+}
+
+.stats {
+  display: flex;
+  gap: 8px;
 }
 
 .stat {
@@ -675,4 +689,171 @@ dialog input:focus {
   .account-btn {
     padding: 2px;
   }
+}
+
+/* Date-range filter ------------------------------------------------------ */
+
+.filter {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+@media (prefers-color-scheme: dark) {
+  .chip.on {
+    color: #04201d;
+  }
+}
+
+.dates label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.dates input {
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 1rem;
+  color: var(--text);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* Summary extras --------------------------------------------------------- */
+
+.warn {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.unpaid-row,
+.exports {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+
+.unpaid-row {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.exports {
+  justify-content: flex-end;
+}
+
+/* Tags on an entry ------------------------------------------------------- */
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.tag.paid {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.tag.warn,
+.tag.pending {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* Checkboxes and select -------------------------------------------------- */
+
+.checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Keep the native tick: the rule above strips appearance from dialog inputs. */
+label.check input[type='checkbox'] {
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  accent-color: var(--accent);
+  -webkit-appearance: checkbox;
+  appearance: checkbox;
+}
+
+dialog h3 {
+  margin: 4px 0 0;
+  font-size: 0.95rem;
+}
+
+dialog select {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 1rem;
+  color: var(--text);
 }

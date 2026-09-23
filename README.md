@@ -1,4 +1,4 @@
-# Work Hours — v0.0
+# Work Hours — v0.1
 
 A small installable web app (PWA) for logging work shifts. Sign in with Google;
 each account gets its own private set of hours, synced live across devices and
@@ -10,11 +10,22 @@ usable offline.
 - **Manual entry**: date, start, end, break, rate (pre-filled from your default)
   and a note. If the end time is earlier than the start time, the shift ends the
   next day.
-- **Monthly view**: shifts grouped by day, newest first, with hours and earnings
-  for each shift, each day and the whole month. Tap a shift to edit or delete it.
-- **PDF export** of the month shown. On iPhone it opens the share sheet.
-- **Offline**: entries saved without a connection are marked with an amber dot
-  and sync automatically once you're back online.
+- **Date-range filter**: From / To plus one-tap presets (this week, this month,
+  last month, this year). Shifts are grouped by day, newest first, with hours and
+  earnings per shift, per day and for the whole range. Tap a shift to edit or
+  delete it. The chosen range is remembered on that device.
+- **Paid / unpaid**: mark a shift paid, see what you're still owed for the range,
+  and mark everything shown as paid in one go.
+- **Overlap warning**: shifts covering the same hours are flagged in the list and
+  while you edit, so the same time never gets counted (or billed) twice.
+- **Export the filtered range**: PDF (A4, fixed columns, TOTAL row) and CSV
+  (Date, Start, End, Break, Hours, Rate, Earnings, Note, Paid). On iPhone both
+  open the share sheet.
+- **Defaults pop-up** behind the app logo: hourly rate, currency (20 common ones,
+  EUR by default), the start/end/break that pre-fill a new entry, and which
+  columns the PDF report includes.
+- **Offline**: entries saved without a connection are tagged "Syncing" and sync
+  automatically once you're back online.
 
 Stack: Vite + vanilla TypeScript, Firebase Auth + Firestore (modular SDK),
 vite-plugin-pwa, jsPDF + jspdf-autotable.
@@ -25,7 +36,7 @@ vite-plugin-pwa, jsPDF + jspdf-autotable.
 users/{uid}/settings/main      { defaultRate, currency }
 users/{uid}/state/clock        { start }            // present only while clocked in
 users/{uid}/entries/{entryId}  { date, start, end, breakMinutes, rate, note,
-                                 createdAt, updatedAt }
+                                 paid, createdAt, updatedAt }
 ```
 
 Hours and earnings are never stored. They are computed when read:
@@ -36,10 +47,13 @@ listed under.
 Settings live at `settings/main` because Firestore document paths need an even
 number of segments, so `users/{uid}/settings` alone can't be a document.
 
-**Isolation** is enforced server-side by [`firestore.rules`](firestore.rules):
-a user can only read or write documents under their own `users/{uid}`. Entry
-writes are also validated for field types, `end > start` and note length.
-Signing out clears that device's offline cache.
+**Isolation** is enforced server-side: a user can only read or write documents
+under their own `users/{uid}`. Signing out clears that device's offline cache.
+
+[`firestore.rules`](firestore.rules) in this repo is a stricter version of the
+rules currently published: on top of the ownership check it validates entry
+fields (`end > start`, non-negative break and rate, note length). Publish it with
+`firebase deploy --only firestore:rules` if you want that extra protection.
 
 ## Setup
 

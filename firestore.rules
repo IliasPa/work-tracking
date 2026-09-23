@@ -10,14 +10,15 @@ service cloud.firestore {
     }
 
     function validEntry(d) {
-      return d.keys().hasOnly(['date', 'start', 'end', 'breakMinutes', 'rate', 'note', 'createdAt', 'updatedAt'])
+      return d.keys().hasOnly(['date', 'start', 'end', 'breakMinutes', 'rate', 'note', 'paid', 'createdAt', 'updatedAt'])
         && d.date is string && d.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
         && d.start is timestamp
         && d.end is timestamp
         && d.end > d.start
         && d.breakMinutes is number && d.breakMinutes >= 0
         && d.rate is number && d.rate >= 0
-        && d.note is string && d.note.size() <= 500;
+        && d.note is string && d.note.size() <= 500
+        && d.paid is bool;
     }
 
     match /users/{uid} {

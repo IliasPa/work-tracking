@@ -51,11 +51,88 @@ export function isOvernight(start: Date, end: Date): boolean {
   return toDateStr(start) !== toDateStr(end);
 }
 
+export interface DateRange {
+  from: string;
+  to: string;
+}
+
 /** First and last day ("YYYY-MM-DD") of the month containing `d`. */
-export function monthBounds(d: Date): { from: string; to: string } {
+export function monthBounds(d: Date): DateRange {
   const first = new Date(d.getFullYear(), d.getMonth(), 1);
   const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
   return { from: toDateStr(first), to: toDateStr(last) };
+}
+
+/** Monday-to-Sunday week containing `d`. */
+export function weekBounds(d: Date): DateRange {
+  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
+  const sunday = new Date(monday);
+  sunday.setDate(sunday.getDate() + 6);
+  return { from: toDateStr(monday), to: toDateStr(sunday) };
+}
+
+export const RANGE_PRESETS = ['This week', 'This month', 'Last month', 'This year'] as const;
+export type RangePreset = (typeof RANGE_PRESETS)[number];
+
+export function presetRange(preset: RangePreset, today = new Date()): DateRange {
+  switch (preset) {
+    case 'This week':
+      return weekBounds(today);
+    case 'This month':
+      return monthBounds(today);
+    case 'Last month':
+      return monthBounds(new Date(today.getFullYear(), today.getMonth() - 1, 1));
+    case 'This year':
+      return { from: `${today.getFullYear()}-01-01`, to: `${today.getFullYear()}-12-31` };
+  }
+}
+
+/** The preset a range matches exactly, if any. */
+export function matchingPreset(range: DateRange, today = new Date()): RangePreset | null {
+  return (
+    RANGE_PRESETS.find((p) => {
+      const r = presetRange(p, today);
+      return r.from === range.from && r.to === range.to;
+    }) ?? null
+  );
+}
+
+/** "1–30 Sep 2026", "28 Sep – 4 Oct 2026" or "2026" for a whole year. */
+export function formatRange({ from, to }: DateRange): string {
+  const a = parseDateStr(from);
+  const b = parseDateStr(to);
+  const day = (d: Date) => new Intl.DateTimeFormat(undefined, { day: 'numeric' }).format(d);
+  const dayMonth = (d: Date) => new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(d);
+  const full = (d: Date) =>
+    new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' }).format(d);
+  if (from === to) return full(a);
+  const sameMonth = a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
+  const wholeMonth = sameMonth && a.getDate() === 1 && toDateStr(b) === monthBounds(a).to;
+  if (wholeMonth) return new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(a);
+  const wholeYear = from === `${a.getFullYear()}-01-01` && to === `${a.getFullYear()}-12-31`;
+  if (wholeYear) return String(a.getFullYear());
+  // Build the pieces separately so the result reads correctly in any locale.
+  const monthYear = new Intl.DateTimeFormat(undefined, { month: 'short', year: 'numeric' }).format(b);
+  if (sameMonth) return `${day(a)}\u2013${day(b)} ${monthYear}`;
+  if (a.getFullYear() === b.getFullYear()) return `${dayMonth(a)} \u2013 ${dayMonth(b)} ${b.getFullYear()}`;
+  return `${full(a)} \u2013 ${full(b)}`;
+}
+
+/**
+ * Ids of entries whose worked time overlaps another entry's. Shifts that touch
+ * end-to-start don't count. Used to catch the same hours logged twice.
+ */
+export function overlappingIds(entries: { id: string; start: Date; end: Date }[]): Set<string> {
+  const sorted = [...entries].sort((a, b) => a.start.getTime() - b.start.getTime());
+  const ids = new Set<string>();
+  for (let i = 0; i < sorted.length; i++) {
+    for (let j = i + 1; j < sorted.length; j++) {
+      if (sorted[j].start.getTime() >= sorted[i].end.getTime()) break;
+      ids.add(sorted[i].id);
+      ids.add(sorted[j].id);
+    }
+  }
+  return ids;
 }
 
 export function formatHours(h: number): string {
