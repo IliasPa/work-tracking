@@ -2,7 +2,18 @@
 
 Newest first. Each version is one commit in this repository.
 
-## v1.0 — 2026-09-23
+## v0.5 — 2026-09-24
+
+- The export buttons moved to the right-hand side of the summary: Invoice on
+  top, PDF and CSV side by side underneath. The figures keep the left, wrapping
+  onto a second row on narrow screens rather than being cut short.
+- Settings → Show on the main screen: switches for the clock-in card and for the
+  PDF and CSV buttons (both together). The clock comes back by itself whenever a
+  shift is running, so there is always a way to clock out, and the Invoice button
+  always stays.
+- The release previously written up here as v1.0 is now v0.4.
+
+## v0.4 — 2026-09-23
 
 **Earnings stop moving**
 

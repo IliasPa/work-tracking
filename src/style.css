@@ -432,18 +432,29 @@ button:disabled {
 
 .summary {
   display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+/* Figures on the left, export buttons stacked down the right. */
+.summary-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 12px 14px;
 }
 
 .stats {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
 }
 
 .stat {
-  flex: 1;
+  /* Wrap onto a second row rather than truncating a total. */
+  flex: 1 1 72px;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -779,7 +790,27 @@ dialog input:focus {
 }
 
 .exports {
-  justify-content: flex-end;
+  flex: none;
+  flex-direction: column;
+  align-items: stretch;
+  width: 112px;
+  gap: 6px;
+}
+
+.exports .btn {
+  width: 100%;
+  padding: 0 8px;
+}
+
+.export-pair {
+  display: flex;
+  gap: 6px;
+}
+
+.export-pair .btn {
+  flex: 1;
+  min-width: 0;
+  padding: 0 4px;
 }
 
 /* Tags on an entry ------------------------------------------------------- */
@@ -963,9 +994,6 @@ dialog textarea {
   text-transform: capitalize;
 }
 
-.stats {
-  flex-wrap: wrap;
-}
 
 /* Floating add button ---------------------------------------------------- */
 
@@ -1010,4 +1038,10 @@ dialog textarea {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+@media (max-width: 420px) {
+  .exports {
+    width: 96px;
+  }
 }

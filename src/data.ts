@@ -27,6 +27,9 @@ export interface Settings extends PayRules {
   defaultBreakMinutes: number;
   /** Job used on the last saved entry; pre-selected on the next one. */
   lastJobId: string;
+  /** Parts of the main screen the user has switched off. */
+  showClock: boolean;
+  showExports: boolean;
   /** Which columns the PDF report includes. */
   reportNote: boolean;
   reportRate: boolean;
@@ -48,6 +51,8 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultEnd: '17:00',
   defaultBreakMinutes: 0,
   lastJobId: '',
+  showClock: true,
+  showExports: true,
   reportNote: true,
   reportRate: true,
   reportBreak: true,
@@ -117,6 +122,8 @@ export function watchSettings(uid: string, cb: (s: Settings) => void): Unsubscri
       defaultEnd: str(d.defaultEnd, D.defaultEnd),
       defaultBreakMinutes: num(d.defaultBreakMinutes, D.defaultBreakMinutes),
       lastJobId: str(d.lastJobId, ''),
+      showClock: bool(d.showClock, D.showClock),
+      showExports: bool(d.showExports, D.showExports),
       reportNote: bool(d.reportNote, D.reportNote),
       reportRate: bool(d.reportRate, D.reportRate),
       reportBreak: bool(d.reportBreak, D.reportBreak),

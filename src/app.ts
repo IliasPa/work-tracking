@@ -356,6 +356,7 @@ function renderMain() {
   listeners.push(
     watchSettings(u.uid, (s) => {
       settings = s;
+      renderClock();
       renderRange();
     }),
     watchJobs(
@@ -415,6 +416,9 @@ function wireAccountMenu() {
 
 function renderClock() {
   const el = $('#clock');
+  // Hidden by choice, but always shown while clocked in so there is a way out.
+  el.hidden = !settings.showClock && !clock;
+  if (el.hidden) return;
   if (!clock) {
     el.classList.remove('active');
     el.innerHTML = `
@@ -524,6 +528,7 @@ function renderSummary() {
   const extraHours = totalPaidHours - totalHours;
 
   $('#summary').innerHTML = `
+    <div class="summary-main">
     <div class="stats">
       <div class="stat"><span class="stat-label">Hours</span><span class="stat-value">${totalHours.toFixed(2)}</span></div>
       ${
@@ -547,14 +552,23 @@ function renderSummary() {
            </div>`
         : ''
     }
+    </div>
     <div class="exports">
-      <button class="btn ghost small" id="export-pdf" ${list.length ? '' : 'disabled'}>PDF</button>
-      <button class="btn ghost small" id="export-csv" ${list.length ? '' : 'disabled'}>CSV</button>
       <button class="btn ghost small" id="export-invoice" ${list.length ? '' : 'disabled'}>Invoice</button>
+      ${
+        settings.showExports
+          ? `<div class="export-pair">
+               <button class="btn ghost small" id="export-pdf" ${list.length ? '' : 'disabled'}>PDF</button>
+               <button class="btn ghost small" id="export-csv" ${list.length ? '' : 'disabled'}>CSV</button>
+             </div>`
+          : ''
+      }
     </div>`;
 
-  $('#export-pdf').onclick = exportRangePdf;
-  $('#export-csv').onclick = exportRangeCsv;
+  if (settings.showExports) {
+    $('#export-pdf').onclick = exportRangePdf;
+    $('#export-csv').onclick = exportRangeCsv;
+  }
   $('#export-invoice').onclick = openInvoiceDialog;
   const markPaid = root.querySelector<HTMLButtonElement>('#mark-paid');
   if (markPaid) {
@@ -1019,6 +1033,18 @@ function settingsDialogHtml(): string {
         </details>
 
         <details>
+          <summary>Show on the main screen</summary>
+          <div class="section">
+            <div class="checks">
+              <label class="check"><input type="checkbox" name="showClock"><span>Clock in / out</span></label>
+              <label class="check"><input type="checkbox" name="showExports"><span>PDF and CSV buttons</span></label>
+            </div>
+            <p class="muted small">The clock reappears by itself whenever a shift is running, so you can always
+            clock out. The Invoice button always stays.</p>
+          </div>
+        </details>
+
+        <details>
           <summary>Report columns</summary>
           <div class="section">
             <div class="checks">
@@ -1078,6 +1104,8 @@ function openSettingsDialog() {
   settingsField('invoicePrefix').value = s.invoicePrefix;
   settingsField('invoiceCounter').value = String(s.invoiceCounter);
   settingsField('vatPercent').value = String(s.vatPercent);
+  settingsField('showClock').checked = s.showClock;
+  settingsField('showExports').checked = s.showExports;
   settingsField('reportBreak').checked = s.reportBreak;
   settingsField('reportRate').checked = s.reportRate;
   settingsField('reportEarnings').checked = s.reportEarnings;
@@ -1204,6 +1232,8 @@ function wireSettingsDialog() {
       invoicePrefix: settingsField('invoicePrefix').value.trim(),
       invoiceCounter: Math.round(counter!),
       vatPercent: vat!,
+      showClock: settingsField('showClock').checked,
+      showExports: settingsField('showExports').checked,
       reportBreak: settingsField('reportBreak').checked,
       reportRate: settingsField('reportRate').checked,
       reportEarnings: settingsField('reportEarnings').checked,
